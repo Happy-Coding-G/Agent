@@ -14,8 +14,8 @@ class Settings(BaseSettings):
 
     # --- MinIO 配置 ---
     MINIO_ENDPOINT: str = Field(default="127.0.0.1:9000")
-    MINIO_ACCESS_KEY: str = Field(default="minioadmin")
-    MINIO_SECRET_KEY: str = Field(default="minioadmin")
+    MINIO_ACCESS_KEY: str = Field(default="admin")
+    MINIO_SECRET_KEY: str = Field(default="minio123")
     MINIO_SECURE: bool = Field(default=False)
 
     # 构造异步连接字符串，用于 MySQL 交互
