@@ -119,16 +119,36 @@ export async function renameFile(spaceId: string, filePublicId: string, newName:
   console.log("[ptds] 重命名文件成功");
 }
 
-export async function uploadFileToMinio(presignedUrl: string, file: File): Promise<void> {
+export async function uploadFileToMinio(presignedUrl: string, file: File, onProgress?: (progress: number) => void): Promise<void> {
   console.log("[ptds] 上传文件到 MinIO:", file.name);
-  await fetch(presignedUrl, {
-    method: "PUT",
-    body: file,
-    headers: {
-      "Content-Type": file.type,
-    },
+  
+  return new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable && onProgress) {
+        const progress = Math.round((event.loaded / event.total) * 100);
+        onProgress(progress);
+      }
+    });
+    
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        console.log("[ptds] MinIO 上传完成");
+        resolve();
+      } else {
+        reject(new Error(`上传失败: ${xhr.status} ${xhr.statusText}`));
+      }
+    });
+    
+    xhr.addEventListener('error', () => {
+      reject(new Error('网络错误，上传失败'));
+    });
+    
+    xhr.open('PUT', presignedUrl);
+    xhr.setRequestHeader('Content-Type', file.type);
+    xhr.send(file);
   });
-  console.log("[ptds] MinIO 上传完成");
 }
 
 export async function uploadFile(
@@ -141,7 +161,7 @@ export async function uploadFile(
   
   const initResult = await initUpload(spaceId, folderId, file.name, file.size);
   
-  await uploadFileToMinio(initResult.presigned_url, file);
+  await uploadFileToMinio(initResult.presigned_url, file, onProgress);
   
   await completeUpload(spaceId, initResult.upload_id, initResult.object_key);
   
