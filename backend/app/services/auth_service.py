@@ -1,6 +1,6 @@
 import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.core.errors import ServiceError
 from app.core.security.password import hash_password, verify_password
@@ -47,7 +47,20 @@ class AuthService:
             raise
         except IntegrityError:
             raise ServiceError(400, "Identifier already registered")
+        except OperationalError as e:
+            raise ServiceError(
+                503,
+                "Database unavailable: cannot connect to PostgreSQL. "
+                "Check DATABASE_URL/DB_SSLMODE and ensure PostgreSQL is reachable.",
+            ) from e
         except Exception as e:
+            msg = str(e).lower()
+            if "winerror 1225" in msg or "connection refused" in msg:
+                raise ServiceError(
+                    503,
+                    "Database unavailable: cannot connect to PostgreSQL. "
+                    "Check DATABASE_URL/DB_SSLMODE and ensure PostgreSQL is reachable.",
+                ) from e
             raise ServiceError(500, f"Registration failed: {str(e)}")
 
     async def login(self, req: AuthRequest) -> Token:
