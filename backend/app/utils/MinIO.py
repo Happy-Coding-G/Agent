@@ -1,5 +1,8 @@
-from minio import Minio
 from datetime import timedelta
+from io import BytesIO
+
+from minio import Minio
+
 from app.core.config import settings
 
 
@@ -17,12 +20,22 @@ class MinioService:
             self.client.make_bucket(self.bucket)
 
     def get_upload_url(self, object_key: str):
-        """生成预签名上传 URL (PUT)"""
+        """Generate presigned upload URL (PUT)."""
         return self.client.presigned_put_object(self.bucket, object_key, expires=timedelta(minutes=30))
 
     def get_download_url(self, object_key: str):
-        """生成预览/下载 URL (GET)"""
+        """Generate presigned download URL (GET)."""
         return self.client.presigned_get_object(self.bucket, object_key, expires=timedelta(hours=1))
+
+    def upload_text(self, object_key: str, content: str, content_type: str = "text/markdown; charset=utf-8"):
+        data = content.encode("utf-8")
+        self.client.put_object(
+            self.bucket,
+            object_key,
+            data=BytesIO(data),
+            length=len(data),
+            content_type=content_type,
+        )
 
 
 minio_service = MinioService()
