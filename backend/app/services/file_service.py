@@ -10,6 +10,7 @@ from app.repositories.file_repo import FileRepository
 from app.repositories.file_version_repo import FileVersionRepository
 from app.repositories.upload_repo import UploadRepository
 from app.utils.MinIO import minio_service
+from app.services.ingest_service import IngestService, spawn_ingest_job
 
 
 class SpaceFileService:
@@ -104,7 +105,13 @@ class SpaceFileService:
         presigned_url = minio_service.get_upload_url(object_key)
         return {"upload_id": upload_id, "upload_url": presigned_url, "object_key": object_key}
 
-    async def complete_upload(self, space_public_id: str, upload_id: str, object_key: str, user: Users):
+    async def complete_upload(
+        self,
+        space_public_id: str,
+        upload_id: str,
+        object_key: str,
+        user: Users,
+    ):
         async with self.db.begin():
             space = await self._require_space(space_public_id, user)
             space_db_id = space.id
@@ -132,7 +139,22 @@ class SpaceFileService:
             new_file.current_version_id = new_version.id
             task.status = "completed"
 
-        return {"status": "OK", "public_id": new_file.public_id}
+        ingest_service = IngestService(self.db)
+        doc, job = await ingest_service.create_ingest_job_from_version(
+            space_id=space_db_id,
+            file_id=new_file.id,
+            file_version_id=new_version.id,
+            object_key=object_key,
+            created_by=user.id,
+        )
+        spawn_ingest_job(job.ingest_id)
+
+        return {
+            "status": "OK",
+            "public_id": new_file.public_id,
+            "doc_id": str(doc.doc_id),
+            "ingest_id": str(job.ingest_id),
+        }
 
     async def get_space_tree(self, space_id: str, user: Users):
         space = await self._require_space(space_id, user)
