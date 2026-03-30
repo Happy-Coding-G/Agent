@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.db.models import Users
@@ -16,3 +18,4 @@ class UserRepository:
         self.db.add(u)
         await self.db.flush()
         return u
+

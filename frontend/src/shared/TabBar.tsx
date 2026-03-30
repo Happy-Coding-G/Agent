@@ -5,6 +5,7 @@ export default function TabBar() {
   const activeTabId = useWorkbench(s => s.activeTabId);
   const setActiveTab = useWorkbench(s => s.setActiveTab);
   const closeTab = useWorkbench(s => s.closeTab);
+  const openTab = useWorkbench(s => s.openTab);
 
   return (
     <div className="tabbar" aria-label="Tabs">
@@ -28,6 +29,20 @@ export default function TabBar() {
           )}
         </div>
       ))}
+      <button
+        className="btn btn-ghost"
+        style={{ marginLeft: "auto", padding: "4px 8px", fontSize: 12 }}
+        onClick={() =>
+          openTab({
+            id: `tab-md-${Date.now()}`,
+            kind: "markdown",
+            title: "Markdown",
+            payload: { content: "# New Markdown\\n\\nStart writing..." },
+          })
+        }
+      >
+        + MD
+      </button>
     </div>
   );
 }

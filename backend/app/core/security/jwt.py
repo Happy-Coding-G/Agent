@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime, timedelta, timezone
 from jose import jwt, JWTError
 
@@ -27,3 +29,4 @@ def safe_decode(token: str) -> dict:
         return decode_access_token(token)
     except JWTError as e:
         raise TokenDecodeError(str(e))
+

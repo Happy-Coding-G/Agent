@@ -1,7 +1,9 @@
 import uuid
+import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError, OperationalError
 
+from app.core.cache import cache_manager
 from app.core.errors import ServiceError
 from app.core.security.password import hash_password, verify_password
 from app.core.security.jwt import create_access_token, safe_decode, TokenDecodeError
@@ -10,6 +12,8 @@ from app.repositories.user_auth_repo import UserAuthRepository
 from app.repositories.space_repo import SpaceRepository
 from app.schemas.schemas import AuthRequest, Token, TokenData
 from app.db.models import Users
+
+logger = logging.getLogger(__name__)
 
 
 class AuthService:
@@ -31,8 +35,7 @@ class AuthService:
                     display_name=req.display_name or req.identifier,
                 )
                 await self.spaces.create(
-                    owner_user_id=new_user.id,
-                    public_id=uuid.uuid4().hex
+                    owner_user_id=new_user.id, public_id=uuid.uuid4().hex
                 )
                 await self.auth.create(
                     user_id=new_user.id,
@@ -40,8 +43,12 @@ class AuthService:
                     identifier=req.identifier,
                     credential_hashed=hash_password(req.credential),
                 )
-            # begin() 正常退出会 commit
-            return {"status": "OK", "user_id": new_user.id, "message": "User registered successfully"}
+            # 正常退出会 commit
+            return {
+                "status": "OK",
+                "user_id": new_user.id,
+                "message": "User registered successfully",
+            }
 
         except ServiceError:
             raise
@@ -75,11 +82,18 @@ class AuthService:
         if not verify_password(req.credential, auth_obj.credential):
             raise ServiceError(401, "Invalid identifier or password")
 
-        access_token = create_access_token(data={"sub": str(user.id), "user_key": user.user_key})
+        access_token = create_access_token(
+            data={"sub": str(user.id), "user_key": user.user_key}
+        )
+
+        # 登录成功后缓存用户信息
+        await cache_manager.set_user(user.id, user)
+        logger.debug(f"User cached on login: {user.id}")
 
         return Token(access_token=access_token, token_type="bearer")
 
     async def get_current_user(self, token: str) -> Users:
+        """获取当前用户 - 使用缓存优化"""
         try:
             payload = safe_decode(token)
         except TokenDecodeError:
@@ -94,7 +108,28 @@ class AuthService:
         except ValueError:
             raise ServiceError(401, "Could not validate credentials")
 
-        user = await self.users.get_by_id(token_data.user_id)
+        user_id = token_data.user_id
+
+        # 先尝试从缓存获取
+        cached_user = await cache_manager.get_user(user_id)
+        if cached_user is not None:
+            # 验证 user_key 匹配（防止 token 被篡改）
+            if cached_user.user_key == token_data.user_key:
+                return cached_user
+            else:
+                # user_key 不匹配，缓存可能已过期，清除缓存
+                await cache_manager.invalidate_user(user_id)
+                logger.warning(
+                    f"User cache invalidated due to user_key mismatch: {user_id}"
+                )
+
+        # 缓存未命中或验证失败，从数据库获取
+        user = await self.users.get_by_id(user_id)
         if not user:
             raise ServiceError(401, "Could not validate credentials")
+
+        # 缓存用户
+        await cache_manager.set_user(user_id, user)
+        logger.debug(f"User loaded from DB and cached: {user_id}")
+
         return user

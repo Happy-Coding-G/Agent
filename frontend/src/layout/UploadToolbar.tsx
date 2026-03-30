@@ -22,21 +22,20 @@ export default function UploadToolbar() {
 
   const handleUpload = async (file: File) => {
     if (!space?.public_id) {
-      setError("请先选择空间");
+      setError("Please select a space first.");
       return;
     }
     
     setUploading(true);
     setError(null);
     try {
-      await uploadFile(space.public_id, 1, file);
-      log(`[Upload] 成功上传文件: ${file.name}`);
+      await uploadFile(space.public_id, "1", file);
+      log(`[Upload] success: ${file.name}`);
       setFileName("");
     } catch (error: any) {
       const errorMsg = error?.message ?? String(error);
-      log(`[Upload] 上传失败: ${errorMsg}`);
+      log(`[Upload] failed: ${errorMsg}`);
       setError(errorMsg);
-      console.error("[UploadToolbar] 上传失败详情:", error);
     } finally {
       setUploading(false);
       if (fileInputRef.current) {
@@ -63,9 +62,9 @@ export default function UploadToolbar() {
           className="btn btn-primary"
           onClick={triggerFileSelect}
           disabled={uploading}
-          title="上传文件"
+          title="Upload file"
         >
-          {uploading ? "上传中..." : "📤 上传文件"}
+          {uploading ? "Uploading..." : "Upload file"}
         </button>
         {fileName && (
           <span className="badge" style={{ fontSize: 12 }}>
@@ -74,10 +73,11 @@ export default function UploadToolbar() {
         )}
         {error && (
           <span className="badge" style={{ fontSize: 12, color: "var(--danger)", borderColor: "var(--danger)" }}>
-            ❌ {error}
+            [x] {error}
           </span>
         )}
       </div>
     </div>
   );
 }
+

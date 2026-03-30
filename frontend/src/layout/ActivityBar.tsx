@@ -6,20 +6,20 @@ import { Activity } from "../types";
 type Item = { key: Activity; label: string; icon: string; description: string };
 
 const items: Item[] = [
-  { key: "explorer", label: "Explorer", icon: "📁", description: "浏览文件和管理" },
-  { key: "search", label: "Search", icon: "🔎", description: "搜索文件和内容" },
-  { key: "assets", label: "Assets", icon: "🧩", description: "管理和查看资产" },
-  { key: "kg", label: "Graph", icon: "🕸️", description: "知识图谱可视化" },
+  { key: "explorer", label: "Explorer", icon: "EX", description: "Browse files and folders" },
+  { key: "search", label: "Search", icon: "SR", description: "Search files and content" },
+  { key: "assets", label: "Assets", icon: "AS", description: "Manage generated assets" },
+  { key: "kg", label: "Graph", icon: "KG", description: "Knowledge graph" },
 ];
 
 export default function ActivityBar() {
-  const activity = useWorkbench(s => s.activity);
-  const setActivity = useWorkbench(s => s.setActivity);
+  const activity = useWorkbench((s) => s.activity);
+  const setActivity = useWorkbench((s) => s.setActivity);
   const auth = useAuth();
   const navigate = useNavigate();
 
   const handleLogout = () => {
-    if (confirm("确定要退出登录吗？")) {
+    if (confirm("Confirm logout?")) {
       auth.logout();
       navigate("/login", { replace: true });
     }
@@ -40,28 +40,18 @@ export default function ActivityBar() {
           role="button"
           aria-label={it.label}
         >
-          <span style={{ fontSize: 20 }}>{it.icon}</span>
+          <span style={{ fontSize: 12, fontWeight: 600 }}>{it.icon}</span>
           <span className="tooltip">{it.label}</span>
         </div>
       ))}
       <div style={{ flex: 1 }} />
-      <div 
-        className="activitybtn"
-        title="API 文档（需要后端服务）"
-        role="button"
-        onClick={openApiDocs}
-      >
-        <span style={{ fontSize: 20 }}>📚</span>
-        <span className="tooltip">API 文档</span>
+      <div className="activitybtn" title="Open API docs" role="button" onClick={openApiDocs}>
+        <span style={{ fontSize: 12, fontWeight: 600 }}>API</span>
+        <span className="tooltip">API Docs</span>
       </div>
-      <div 
-        className="activitybtn"
-        title="退出登录"
-        role="button"
-        onClick={handleLogout}
-      >
-        <span style={{ fontSize: 20 }}>🚪</span>
-        <span className="tooltip">退出登录</span>
+      <div className="activitybtn" title="Logout" role="button" onClick={handleLogout}>
+        <span style={{ fontSize: 12, fontWeight: 600 }}>OUT</span>
+        <span className="tooltip">Logout</span>
       </div>
     </div>
   );

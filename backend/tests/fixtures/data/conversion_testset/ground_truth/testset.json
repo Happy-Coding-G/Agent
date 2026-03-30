@@ -1,0 +1,109 @@
+{
+  "version": "2.0",
+  "description": "Document Conversion Quality Evaluation Criteria",
+  "evaluation_dimensions": {
+    "cleanliness": {
+      "weight": 0.2,
+      "description": "乱码字符控制 - 检测控制字符和乱码",
+      "indicators": {
+        "control_char_ratio": {
+          "description": "控制字符比例（不包括\x80-\x9f，这是GBK中文范围）",
+          "threshold": "< 0.5% 为优秀，< 1% 为合格"
+        }
+      }
+    },
+    "syntax": {
+      "weight": 0.3,
+      "description": "Markdown语法正确性",
+      "indicators": {
+        "code_block_balance": {
+          "description": "代码块```配对正确",
+          "weight": 0.3
+        },
+        "link_format": {
+          "description": "链接格式 [text](url) 正确",
+          "weight": 0.2
+        },
+        "table_separator": {
+          "description": "表格分隔符 |---:|正确",
+          "weight": 0.2
+        },
+        "heading_hierarchy": {
+          "description": "标题层级 h1->h6 正确",
+          "weight": 0.15
+        },
+        "list_format": {
+          "description": "列表格式 -/*/+ 或 1. 正确",
+          "weight": 0.15
+        }
+      }
+    },
+    "content": {
+      "weight": 0.2,
+      "description": "内容完整度",
+      "indicators": {
+        "char_count": {
+          "description": "字符数量",
+          "threshold": "每1000字符=0.4分，最高0.6分"
+        },
+        "paragraph_preservation": {
+          "description": "段落保留度",
+          "weight": 0.4
+        }
+      }
+    },
+    "structure": {
+      "weight": 0.3,
+      "description": "文档结构完整度",
+      "indicators": {
+        "heading_count": {
+          "description": "标题数量",
+          "threshold": ">=3 得 0.3分",
+          "weight": 0.3
+        },
+        "list_count": {
+          "description": "列表数量",
+          "threshold": ">=2 得 0.2分",
+          "weight": 0.2
+        },
+        "table_count": {
+          "description": "表格数量",
+          "threshold": ">=1 得 0.2分",
+          "weight": 0.2
+        },
+        "codeblock_count": {
+          "description": "代码块数量",
+          "threshold": ">=1 得 0.15分",
+          "weight": 0.15
+        },
+        "link_count": {
+          "description": "链接数量",
+          "threshold": ">=1 得 0.15分",
+          "weight": 0.15
+        }
+      }
+    },
+    "markdown_bonus": {
+      "description": "Markdown格式额外奖励",
+      "bonus": 0.1,
+      "condition": "检测到Markdown特征时加分"
+    }
+  },
+  "scoring_formula": "min(cleanliness*0.2 + syntax*0.3 + content*0.2 + structure*0.3 + markdown_bonus, 1.0)",
+  "grade_thresholds": {
+    "S": [0.95, 1.0],
+    "A": [0.85, 0.95),
+    "B": [0.70, 0.85),
+    "C": [0.50, 0.70),
+    "D": [0.0, 0.50)
+  },
+  "supported_formats": {
+    "input": [".pdf", ".docx", ".doc", ".rtf", ".odt", ".html", ".htm"],
+    "output": ".md"
+  },
+  "conversion_priority": [
+    "1. 专用工具转换 (python-docx, python-pptx, pypdf等)",
+    "2. Pandoc转换 (支持docx/rtf/odt/html -> markdown)",
+    "3. LLM转换 (仅用于OCR或无法识别的乱码文本)"
+  ]
+}

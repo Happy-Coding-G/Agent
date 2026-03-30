@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -35,3 +37,4 @@ class UploadRepository:
     async def get_by_public_id(self, upload_id: str) -> Uploads | None:
         res = await self.db.execute(select(Uploads).where(Uploads.public_id == upload_id))
         return res.scalars().first()
+
