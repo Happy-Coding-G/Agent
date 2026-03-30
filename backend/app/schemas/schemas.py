@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Union
 from datetime import datetime
 
 
@@ -85,3 +85,415 @@ class TreeFolderResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class MarkdownDocSummary(BaseModel):
+    doc_id: str
+    title: str
+    status: str
+    updated_at: datetime
+    content_hash: Optional[str] = None
+    chunk_count: int = 0
+
+
+class MarkdownDocDetail(BaseModel):
+    doc_id: str
+    title: str
+    status: str
+    markdown_text: str
+    markdown_object_key: Optional[str] = None
+    updated_at: datetime
+    content_hash: Optional[str] = None
+    chunk_count: int = 0
+
+
+class MarkdownDocSaveRequest(BaseModel):
+    markdown_text: str
+    title: Optional[str] = None
+
+
+class GraphNodePayload(BaseModel):
+    doc_id: str
+    label: str
+    description: str = ""
+    tags: List[str] = []
+    status: str
+    updated_at: datetime
+
+
+class GraphEdgePayload(BaseModel):
+    edge_id: str
+    source_doc_id: str
+    target_doc_id: str
+    relation_type: str
+    description: str = ""
+    created_at: str
+    updated_at: str
+
+
+class GraphDataResponse(BaseModel):
+    nodes: List[GraphNodePayload]
+    edges: List[GraphEdgePayload]
+
+
+class GraphNodeUpdateRequest(BaseModel):
+    label: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+
+class GraphEdgeCreateRequest(BaseModel):
+    source_doc_id: str
+    target_doc_id: str
+    relation_type: str = Field(default="related_to", min_length=1, max_length=64)
+    description: Optional[str] = None
+
+
+class GraphEdgeUpdateRequest(BaseModel):
+    relation_type: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    description: Optional[str] = None
+
+
+# --- Chat 相关 (已统一为 AgentChat) ---
+# 注意：旧版 ChatRequest 已被弃用，请使用 AgentChatRequest
+# 保留此类仅用于向后兼容，将在未来版本中删除
+class ChatRequest(BaseModel):
+    """[DEPRECATED] 请使用 AgentChatRequest"""
+    space_id: str
+    query: str = Field(..., min_length=1)
+    top_k: int = Field(default=5, ge=1, le=12)
+
+    class Config:
+        json_schema_extra = {
+            "deprecated": True,
+            "description": "已弃用，请使用 AgentChatRequest"
+        }
+
+
+class AssetGenerateRequest(BaseModel):
+    prompt: Optional[str] = None
+
+
+class AssetSummary(BaseModel):
+    asset_id: str
+    title: str
+    summary: str
+    created_at: str
+
+
+class AssetDetail(BaseModel):
+    asset_id: str
+    space_public_id: str
+    title: str
+    summary: str
+    created_at: str
+    updated_at: str
+    prompt: str
+    content_markdown: str
+    graph_snapshot: dict
+
+
+class TradeCreateListingRequest(BaseModel):
+    asset_id: str = Field(..., min_length=1)
+    price_credits: Optional[float] = Field(default=None, gt=0)
+    category: Optional[str] = Field(default="knowledge_report", max_length=64)
+    tags: List[str] = Field(default_factory=list)
+
+
+class TradePrivacyPolicyResponse(BaseModel):
+    policy_id: str
+    version: str
+    principles: List[str]
+    buyer_visibility: dict
+    redaction_rules: List[str]
+    delivery_terms: List[str]
+    notes: List[str]
+
+
+class TradeMarketListing(BaseModel):
+    listing_id: str
+    title: str
+    category: str
+    tags: List[str] = Field(default_factory=list)
+    price_credits: float
+    public_summary: str
+    preview_excerpt: str
+    seller_alias: str
+    purchase_count: int = 0
+    status: str
+    created_at: str
+    updated_at: str
+
+
+class TradeMarketListingDetail(TradeMarketListing):
+    buyer_visibility: dict
+
+
+class TradeListingOwnerDetail(TradeMarketListing):
+    asset_id: str
+    space_public_id: str
+    market_view_count: int = 0
+    revenue_total: float = 0.0
+
+
+class TradeOrderSummary(BaseModel):
+    order_id: str
+    listing_id: str
+    asset_title: str
+    seller_alias: str
+    price_credits: float
+    purchased_at: str
+
+
+class TradeOrderDetail(TradeOrderSummary):
+    platform_fee: float
+    seller_income: float
+    delivery_scope: List[str]
+
+
+class TradeDeliveryPayload(BaseModel):
+    order_id: str
+    listing_id: str
+    asset_title: str
+    purchased_at: str
+    accessible_fields: List[str]
+    content_markdown: str
+    graph_snapshot: dict
+    usage_terms: List[str]
+
+
+class TradeWallet(BaseModel):
+    liquid_credits: float
+    cumulative_sales_earnings: float
+    cumulative_yield_earnings: float
+    total_spent: float
+    auto_yield_enabled: bool
+    yield_strategy: str
+    last_yield_run_at: str
+    updated_at: str
+
+
+class TradeAutoYieldRequest(BaseModel):
+    strategy: Optional[str] = Field(default=None, max_length=32)
+
+
+class TradeYieldReport(BaseModel):
+    run_id: str
+    strategy: str
+    annual_rate: float
+    elapsed_days: float
+    yield_amount: float
+    wallet_before: dict
+    wallet_after: dict
+    listing_adjustments: List[dict] = Field(default_factory=list)
+    generated_at: str
+
+
+# --- Agent 相关 ---
+class AgentChatRequest(BaseModel):
+    """统一的聊天请求模型"""
+    message: str = Field(..., min_length=1, description="用户消息")
+    space_id: str = Field(..., description="工作空间ID")
+    context: Optional[Dict[str, Any]] = Field(default=None, description="额外上下文")
+    stream: bool = Field(default=False, description="是否使用流式响应")
+    top_k: int = Field(default=5, ge=1, le=12, description="检索结果数量（仅QA类请求）")
+
+    # 向后兼容：允许使用旧版 query 参数
+    @property
+    def query(self) -> str:
+        return self.message
+
+
+class AgentChatResponse(BaseModel):
+    """统一的聊天响应模型"""
+    success: bool = Field(default=True, description="是否成功")
+    intent: Optional[str] = Field(default=None, description="识别到的意图")
+    agent_type: str = Field(..., description="处理的Agent类型")
+    result: Dict[str, Any] = Field(default_factory=dict, description="处理结果")
+    sources: Optional[List[Dict[str, Any]]] = Field(default=None, description="来源引用（包含doc_id, title, score等）")
+    answer: Optional[str] = Field(default=None, description="直接回答文本（QA类型）")
+    error: Optional[str] = Field(default=None, description="错误信息")
+    retrieval_debug: Optional[Dict[str, Any]] = Field(default=None, description="检索调试信息")
+
+
+class AgentTaskCreate(BaseModel):
+    agent_type: str = Field(..., description="Agent类型")
+    input_data: Dict[str, Any] = Field(default_factory=dict, description="输入数据")
+    space_id: str = Field(..., description="工作空间ID")
+
+
+class AgentTaskResponse(BaseModel):
+    task_id: str
+    agent_type: str
+    status: str
+    created_at: datetime
+
+
+class FileQueryRequest(BaseModel):
+    query: str = Field(..., min_length=1, description="自然语言查询")
+    space_id: str = Field(..., description="工作空间ID")
+
+
+class FileQueryResult(BaseModel):
+    files: List[Dict[str, Any]] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
+class AssetOrganizeRequest(BaseModel):
+    asset_ids: List[str] = Field(default_factory=list, description="要整理的资产ID列表")
+    space_id: str = Field(..., description="工作空间ID")
+    generate_report: bool = Field(default=True, description="是否生成报告")
+
+
+class AssetClusterResponse(BaseModel):
+    cluster_id: str
+    name: str
+    description: Optional[str] = None
+    summary_report: Optional[str] = None
+    asset_count: int
+    assets: List[str] = Field(default_factory=list)
+
+
+class ReviewRequest(BaseModel):
+    doc_id: str = Field(..., description="要审查的文档ID")
+    review_type: str = Field(default="quality", description="审查类型: quality/compliance/completeness")
+
+
+class ReviewResponse(BaseModel):
+    doc_id: str
+    review_type: str
+    score: float
+    passed: bool
+    issues: List[str] = Field(default_factory=list)
+    final_status: str
+    rework_count: int = 0
+
+
+# --- 混合市场协商 (Hybrid Market Negotiation) ---
+
+class TradeCreateAuctionRequest(BaseModel):
+    """创建拍卖请求"""
+    asset_id: str = Field(..., min_length=1)
+    auction_type: str = Field(..., description="拍卖类型: english, dutch, sealed, vickrey")
+    starting_price: float = Field(..., gt=0)
+    reserve_price: Optional[float] = Field(default=None, gt=0)
+    duration_minutes: int = Field(default=60, ge=5, le=10080)  # 5分钟到7天
+
+
+class TradeAuctionResponse(BaseModel):
+    """拍卖创建响应"""
+    lot_id: str
+    auction_type: str
+    starting_price: float
+    reserve_price: float
+    status: str
+    start_time: str
+    end_time: str
+    negotiation_id: Optional[str] = None
+
+
+class TradePlaceBidRequest(BaseModel):
+    """出价请求"""
+    lot_id: str
+    amount: float = Field(..., gt=0)
+
+
+class TradeBidResponse(BaseModel):
+    """出价响应"""
+    bid_id: str
+    current_price: float
+    current_winner: Optional[int]
+    is_leading: bool
+    auction_ending: str
+
+
+class TradeAuctionStatus(BaseModel):
+    """拍卖状态"""
+    lot_id: str
+    auction_type: str
+    status: str
+    current_price: float
+    current_winner: Optional[int]
+    total_bids: int
+    time_remaining_seconds: float
+    reserve_price: float
+    bid_history: List[dict] = Field(default_factory=list)
+
+
+class TradeCreateNegotiationRequest(BaseModel):
+    """创建双边协商请求"""
+    listing_id: str
+    initial_offer: float = Field(..., gt=0)
+    max_rounds: int = Field(default=10, ge=1, le=50)
+
+
+class TradeNegotiationResponse(BaseModel):
+    """协商创建响应"""
+    session_id: str
+    seller_id: int
+    buyer_id: int
+    current_round: int
+    max_rounds: int
+    status: str
+    next_action: str  # "seller" or "buyer"
+    zopa: Optional[dict] = None  # Zone of Possible Agreement
+
+
+class TradeMakeOfferRequest(BaseModel):
+    """出价请求"""
+    session_id: str
+    price: float = Field(..., gt=0)
+    terms: Optional[Dict[str, Any]] = Field(default=None)
+    message: Optional[str] = Field(default=None, max_length=500)
+
+
+class TradeOfferResponse(BaseModel):
+    """出价响应"""
+    offer_id: str
+    round: int
+    from_party: str
+    price: float
+    concession_rate: float
+    waiting_for: str
+    expires_at: str
+
+
+class TradeRespondOfferRequest(BaseModel):
+    """响应出价请求"""
+    session_id: str
+    response: str = Field(..., description="accept, reject, or counter")
+    counter_price: Optional[float] = Field(default=None)
+
+
+class TradeNegotiationStatus(BaseModel):
+    """协商状态"""
+    session_id: str
+    status: str
+    current_round: int
+    max_rounds: int
+    rounds_summary: List[dict] = Field(default_factory=list)
+    agreement: Optional[dict] = None
+    termination_reason: Optional[str] = None
+
+
+class TradeContractNetAnnounceRequest(BaseModel):
+    """合同网任务发布请求"""
+    asset_id: str
+    task_description: Dict[str, Any]
+    eligibility_criteria: Optional[Dict[str, Any]] = Field(default=None)
+    deadline_minutes: int = Field(default=60, ge=5)
+
+
+class TradeContractNetResponse(BaseModel):
+    """合同网响应"""
+    announcement_id: str
+    phase: str
+    deadline: float
+
+
+class TradeContractNetBidRequest(BaseModel):
+    """合同网投标请求"""
+    announcement_id: str
+    bid_amount: float = Field(..., gt=0)
+    qualifications: Optional[Dict[str, Any]] = Field(default=None)
+

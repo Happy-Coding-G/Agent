@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.db.models import UserAuth
@@ -21,3 +23,4 @@ class UserAuthRepository:
         )
         self.db.add(ua)
         return ua
+

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import update, func
@@ -68,3 +70,4 @@ class FolderRepository:
             select(Folders).where(Folders.space_id == space_db_id, Folders.deleted_at.is_(None))
         )
         return res.scalars().all()
+

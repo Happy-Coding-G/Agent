@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
@@ -40,3 +42,4 @@ class SpaceRepository:
 
     async def delete(self, space: Spaces) -> None:
         await self.db.delete(space)
+

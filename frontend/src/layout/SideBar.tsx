@@ -7,11 +7,15 @@ import AssetsView from "../views/AssetsView";
 import GraphView from "../views/GraphView";
 import SpaceManager from "../pages/SpaceManager";
 
+function GraphEditorView() {
+  return <GraphView mode="editor" showToolbar={false} />;
+}
+
 const VIEWS = {
   explorer: { title: "Explorer", component: ExplorerView },
   search: { title: "Search", component: SearchView },
   assets: { title: "Assets", component: AssetsView },
-  kg: { title: "Knowledge Graph", component: GraphView },
+  kg: { title: "Knowledge Graph Editor", component: GraphEditorView },
 } as const;
 
 type ActivityType = keyof typeof VIEWS;
@@ -76,7 +80,6 @@ export default function SideBar() {
       try {
         await navigator.clipboard.writeText(user.user_key);
       } catch {
-        console.warn("Failed to copy to clipboard");
       }
     }
   }, [user?.user_key]);
@@ -92,9 +95,9 @@ export default function SideBar() {
             onClick={() => setShowSpaceManager(true)}
             style={{ padding: "4px 10px" }}
           >
-            <span className="space-context-icon">🏠</span>
+            <span className="space-context-icon">HOME</span>
             <span className="space-context-name">
-              {currentSpace?.name ?? "选择空间"}
+              {currentSpace?.name ?? "Select space"}
             </span>
             <span className="space-context-badge">v1</span>
           </div>
@@ -104,7 +107,7 @@ export default function SideBar() {
           <div
             className="user-avatar"
             onClick={() => setShowUserPanel(!showUserPanel)}
-            title="用户菜单"
+            title="User menu"
           >
             {avatarInitial}
           </div>
@@ -118,20 +121,20 @@ export default function SideBar() {
               <div className="user-panel-avatar">{avatarInitial}</div>
               <div className="user-panel-info">
                 <div className="user-panel-name">
-                  {user?.display_name || user?.user_key || "未知用户"}
+                  {user?.display_name || user?.user_key || "Unknown user"}
                 </div>
                 <div className="user-panel-key">ID: {user?.id ?? "-"}</div>
               </div>
             </div>
 
             <div className="user-panel-section">
-              <div className="user-panel-section-title">用户信息</div>
+              <div className="user-panel-section-title">User info</div>
               <div className="user-panel-item">
                 <span className="user-panel-item-key">User Key</span>
                 <span
                   className="user-panel-item-value user-key-copyable"
                   onClick={handleCopyKey}
-                  title="点击复制"
+                  title="Copy"
                 >
                   {maskedUserKey}
                 </span>
@@ -140,7 +143,7 @@ export default function SideBar() {
 
             <div className="user-panel-actions">
               <button className="btn btn-ghost" style={{ flex: 1 }} onClick={handleLogout}>
-                🚪 退出登录
+                Logout
               </button>
             </div>
           </div>
@@ -170,15 +173,7 @@ export default function SideBar() {
         </div>
 
         <div className="view-container">
-          {Object.entries(VIEWS).map(([key, config]) => {
-            const ViewComponent = config.component;
-            const isActive = key === activity;
-            return (
-              <div key={key} style={{ display: isActive ? "block" : "none", height: "100%" }}>
-                <ViewComponent />
-              </div>
-            );
-          })}
+          <CurrentView />
         </div>
       </div>
 

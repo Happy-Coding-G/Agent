@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.api.deps.auth import get_current_user
 from app.core.errors import ServiceError
-from app.services.file_service import SpaceFileService
+from app.services.file import SpaceFileService
 from app.schemas.schemas import FolderCreate, FolderRenameRequest, TreeFolderResponse
 from app.db.models import Users
 

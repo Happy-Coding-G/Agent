@@ -6,7 +6,7 @@ from app.db.session import get_db
 from app.db.models import Users
 from app.schemas.schemas import SpaceCreate, SpaceResponse
 from app.core.errors import ServiceError
-from app.services.space_service import SpaceService
+from app.services.space import SpaceService
 from app.api.deps.auth import get_current_user
 
 router = APIRouter(prefix="/spaces", tags=["Spaces"])
