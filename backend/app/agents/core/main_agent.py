@@ -39,7 +39,7 @@ class SubAgents:
             from app.agents.subagents.data_process_agent import DataProcessAgent
             from app.agents.subagents.review_agent import ReviewAgent
             from app.agents.subagents.asset_organize_agent import AssetOrganizeAgent
-            from app.agents.subagents.trade_agent import TradeAgent
+            from app.agents.subagents.trade import TradeAgent
 
             # 按依赖初始化各子 Agent。
             if self._space_path:
@@ -59,8 +59,8 @@ class SubAgents:
             self._graphs[AgentType.ASSET_ORGANIZE] = self._agents[AgentType.ASSET_ORGANIZE].graph
 
             self._agents[AgentType.TRADE] = TradeAgent(self._db)
-            # 交易 Agent 内部封装多种交易工作流。
-            self._graphs[AgentType.TRADE] = self._agents[AgentType.TRADE]
+            # TradeAgent 现在使用 LangGraph，与其他 Agent 统一架构
+            self._graphs[AgentType.TRADE] = self._agents[AgentType.TRADE].graph
 
             self._initialized = True
             logger.info("All sub-agents initialized successfully")
