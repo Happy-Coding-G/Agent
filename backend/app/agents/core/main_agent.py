@@ -9,7 +9,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .state import MainAgentState, AgentType, TaskStatus
+from .state import MainAgentState, AgentType, TaskStatus, SubAgentInput
 from .prompts import INTENT_DETECTION_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class SubAgents:
     async def invoke_subagent(
         self,
         agent_type: AgentType,
-        input_state: Dict[str, Any]
+        input_state: SubAgentInput
     ) -> Dict[str, Any]:
         # 确保子 Agent 已完成初始化。
         self._lazy_init()

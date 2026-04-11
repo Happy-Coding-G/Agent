@@ -21,7 +21,7 @@ class AgentType(str, Enum):
     TRADE = "trade"
     CHAT = "chat"  # fallback for general chat
 
-class MainAgentState(TypedDict):
+class MainAgentState(TypedDict, total=False):
     """State for the MainAgent orchestrator - tracks user request, intent, and delegation."""
     user_request: str  # Raw user input
     space_id: Optional[str]  # Current space context
@@ -36,6 +36,28 @@ class MainAgentState(TypedDict):
     context: Optional[Dict[str, Any]]  # Additional context from request
     error: Optional[str]  # Error message if any
     retry_count: int  # Number of retries attempted
+
+
+class SubAgentInput(TypedDict, total=False):
+    """Standard input format for invoking subagents via invoke_subagent()."""
+    user_request: str  # The user's original request/query
+    space_id: Optional[str]  # Space public ID for permission filtering
+    user_id: Optional[int]  # Current user ID
+    top_k: int  # Number of results to retrieve (for QA)
+    source_type: str  # Source type (for data processing)
+    source_path: str  # Source path/identifier
+    doc_id: str  # Document ID (for review)
+    asset_ids: List[str]  # Asset IDs (for asset organization)
+    # Trade-specific fields
+    action: str  # Trade action type
+    listing_id: Optional[str]
+    budget_max: float
+    bid_amount: float
+    pricing_strategy: str
+    reserve_price: float
+    mechanism_hint: str
+    # Generic extension field
+    extra: Optional[Dict[str, Any]]
 
 class FileQueryState(TypedDict):
     query: str
