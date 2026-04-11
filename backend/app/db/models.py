@@ -235,6 +235,24 @@ class Users(Base):
         "Documents", back_populates="creator"
     )
 
+    # Data Rights relationships
+    data_assets: Mapped[List["DataAssets"]] = relationship(
+        "DataAssets", back_populates="owner"
+    )
+    rights_granted: Mapped[List["DataRightsTransactions"]] = relationship(
+        "DataRightsTransactions",
+        foreign_keys="DataRightsTransactions.owner_id",
+        back_populates="owner"
+    )
+    rights_received: Mapped[List["DataRightsTransactions"]] = relationship(
+        "DataRightsTransactions",
+        foreign_keys="DataRightsTransactions.buyer_id",
+        back_populates="buyer"
+    )
+    access_logs: Mapped[List["DataAccessAuditLogs"]] = relationship(
+        "DataAccessAuditLogs", back_populates="buyer"
+    )
+
 
 class Spaces(Base):
     __tablename__ = "spaces"
@@ -2265,15 +2283,201 @@ class OutboxEvents(Base):
     )
 
 
-# Import data rights models to register them with Base
-from app.db.data_rights_models import (
-    DataAssets,
-    DataRightsTransactions,
-    DataAccessAuditLogs,
-    PolicyViolations,
-    DataLineageNodes,
-    DataSensitivityLevel,
-    ComputationMethod,
-    DataRightsStatus,
-)
+# =============================================================================
+# Data Rights Models (Phase 1)
+# =============================================================================
+
+class DataSensitivityLevel(str, PyEnum):
+    """数据敏感度级别"""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class ComputationMethod(str, PyEnum):
+    """隐私计算方法"""
+    FEDERATED_LEARNING = "federated_learning"
+    MULTI_PARTY_COMPUTATION = "mpc"
+    TEE = "trusted_execution_environment"
+    DIFFERENTIAL_PRIVACY = "differential_privacy"
+    RAW_DATA = "raw_data"
+
+
+class DataRightsStatus(str, PyEnum):
+    """数据权益交易状态"""
+    PENDING = "pending"
+    ACTIVE = "active"
+    GRANTED = "granted"
+    EXPIRED = "expired"
+    REVOKED = "revoked"
+    VIOLATED = "violated"
+
+
+class DataAssets(Base):
+    """数据资产表"""
+    __tablename__ = "data_assets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    asset_id = Column(String(64), unique=True, nullable=False, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    asset_name = Column(String(200), nullable=False)
+    asset_description = Column(Text, nullable=True)
+    data_type = Column(String(50), nullable=False)
+    sensitivity_level = Column(Enum(DataSensitivityLevel), nullable=False)
+    default_anonymization_level = Column(Integer, default=2)
+    quality_completeness = Column(Float, default=0.0)
+    quality_accuracy = Column(Float, default=0.0)
+    quality_timeliness = Column(Float, default=0.0)
+    quality_consistency = Column(Float, default=0.0)
+    quality_uniqueness = Column(Float, default=0.0)
+    quality_overall_score = Column(Float, default=0.0)
+    raw_data_source = Column(String(500), nullable=False)
+    lineage_root = Column(String(64), nullable=True)
+    processing_chain_hash = Column(String(64), nullable=True)
+    storage_location = Column(String(500), nullable=False)
+    data_size_bytes = Column(Integer, default=0)
+    record_count = Column(Integer, nullable=True)
+    related_entities = Column(JSONB, default=list)
+    is_active = Column(Boolean, default=True)
+    is_available_for_trade = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc),
+                        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    owner = relationship("Users", back_populates="data_assets")
+    rights_transactions = relationship("DataRightsTransactions", back_populates="data_asset")
+
+    __table_args__ = (
+        Index("ix_data_assets_owner", "owner_id"),
+        Index("ix_data_assets_sensitivity", "sensitivity_level"),
+        Index("ix_data_assets_type", "data_type"),
+        Index("ix_data_assets_quality", "quality_overall_score"),
+    )
+
+
+class DataRightsTransactions(Base):
+    """数据权益交易表"""
+    __tablename__ = "data_rights_transactions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    transaction_id = Column(String(64), unique=True, nullable=False, index=True)
+    negotiation_id = Column(String(64), ForeignKey("negotiation_sessions.negotiation_id"), nullable=True)
+    data_asset_id = Column(String(64), ForeignKey("data_assets.asset_id"), nullable=False)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    buyer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    rights_types = Column(JSONB, nullable=False)
+    usage_scope = Column(JSONB, nullable=False)
+    restrictions = Column(JSONB, default=list)
+    computation_method = Column(Enum(ComputationMethod), nullable=False)
+    anonymization_level = Column(Integer, nullable=False)
+    computation_constraints = Column(JSONB, default=dict)
+    valid_from = Column(DateTime, nullable=False)
+    valid_until = Column(DateTime, nullable=False)
+    agreed_price = Column(Float, nullable=True)
+    currency = Column(String(10), default="CNY")
+    status = Column(Enum(DataRightsStatus), default=DataRightsStatus.PENDING)
+    settlement_tx_hash = Column(String(128), nullable=True)
+    settlement_time = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc),
+                        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    data_asset = relationship("DataAssets", back_populates="rights_transactions")
+    owner = relationship("Users", foreign_keys=[owner_id], back_populates="rights_granted")
+    buyer = relationship("Users", foreign_keys=[buyer_id], back_populates="rights_received")
+    audit_logs = relationship("DataAccessAuditLogs", back_populates="transaction")
+
+    __table_args__ = (
+        Index("ix_rights_tx_asset", "data_asset_id"),
+        Index("ix_rights_tx_owner", "owner_id"),
+        Index("ix_rights_tx_buyer", "buyer_id"),
+        Index("ix_rights_tx_status", "status"),
+        Index("ix_rights_tx_validity", "valid_from", "valid_until"),
+    )
+
+
+class DataAccessAuditLogs(Base):
+    """数据访问审计日志表"""
+    __tablename__ = "data_access_audit_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    log_id = Column(String(64), unique=True, nullable=False, index=True)
+    transaction_id = Column(String(64), ForeignKey("data_rights_transactions.transaction_id"), nullable=False)
+    negotiation_id = Column(String(64), nullable=True)
+    data_asset_id = Column(String(64), nullable=False)
+    buyer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    access_timestamp = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    access_purpose = Column(String(200), nullable=False)
+    computation_method_used = Column(Enum(ComputationMethod), nullable=False)
+    query_fingerprint = Column(String(64), nullable=False)
+    query_complexity_score = Column(Float, nullable=True)
+    result_size_bytes = Column(Integer, default=0)
+    result_row_count = Column(Integer, nullable=True)
+    result_aggregation_level = Column(String(50), nullable=False)
+    policy_compliance_check = Column(JSONB, default=dict)
+    risk_score = Column(Float, nullable=True)
+    anomaly_flags = Column(JSONB, default=list)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    transaction = relationship("DataRightsTransactions", back_populates="audit_logs")
+    buyer = relationship("Users", back_populates="access_logs")
+
+    __table_args__ = (
+        Index("ix_audit_tx", "transaction_id"),
+        Index("ix_audit_buyer", "buyer_id"),
+        Index("ix_audit_timestamp", "access_timestamp"),
+        Index("ix_audit_risk", "risk_score"),
+    )
+
+
+class PolicyViolations(Base):
+    """策略违规记录表"""
+    __tablename__ = "policy_violations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    violation_id = Column(String(64), unique=True, nullable=False, index=True)
+    transaction_id = Column(String(64), ForeignKey("data_rights_transactions.transaction_id"), nullable=False)
+    negotiation_id = Column(String(64), nullable=True)
+    data_asset_id = Column(String(64), nullable=False)
+    violation_type = Column(String(100), nullable=False)
+    severity = Column(String(20), nullable=False)
+    violation_details = Column(JSONB, nullable=False)
+    evidence = Column(JSONB, nullable=False)
+    potential_data_exposure = Column(Float, nullable=True)
+    affected_records_estimate = Column(Integer, nullable=True)
+    automatic_action_taken = Column(String(200), nullable=True)
+    manual_review_status = Column(String(50), default="pending")
+    resolution_notes = Column(Text, nullable=True)
+    detected_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    resolved_at = Column(DateTime, nullable=True)
+
+    transaction = relationship("DataRightsTransactions")
+
+    __table_args__ = (
+        Index("ix_violation_tx", "transaction_id"),
+        Index("ix_violation_type", "violation_type"),
+        Index("ix_violation_severity", "severity"),
+        Index("ix_violation_status", "manual_review_status"),
+    )
+
+
+class DataLineageNodes(Base):
+    """数据血缘节点表"""
+    __tablename__ = "data_lineage_nodes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    node_id = Column(String(64), unique=True, nullable=False, index=True)
+    asset_id = Column(String(64), ForeignKey("data_assets.asset_id"), nullable=False)
+    node_type = Column(String(50), nullable=False)
+    parent_nodes = Column(JSONB, default=list)
+    processing_logic_hash = Column(String(64), nullable=False)
+    quality_metrics = Column(JSONB, default=dict)
+    provenance_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    __table_args__ = (
+        Index("ix_lineage_asset", "asset_id"),
+        Index("ix_lineage_type", "node_type"),
+    )
 
