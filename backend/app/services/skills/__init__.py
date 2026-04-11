@@ -9,8 +9,6 @@ Skills是轻量级、无状态的工具函数集合，可被多个SubAgent复用
 - 可被多个Agent复用
 """
 
-# 兼容性导入 - Skills已迁移到 app.services.skills
-# 请使用: from app.services.skills import ...
 from app.services.skills.pricing_skill import PricingSkill
 from app.services.skills.lineage_skill import DataLineageSkill
 from app.services.skills.market_analysis_skill import MarketAnalysisSkill
