@@ -46,19 +46,19 @@ print("\n[Test 2] Skills 数据结构定义")
 print("-" * 50)
 
 try:
-    from app.agents.skills.pricing_skill import (
+    from app.services.skills.pricing_skill import (
         PriceSuggestion, MarketAnalysis, NegotiationAdvice
     )
-    from app.agents.skills.lineage_skill import (
+    from app.services.skills.lineage_skill import (
         LineageSummary, ImpactAnalysis, QualityAssessment
     )
-    from app.agents.skills.market_analysis_skill import (
+    from app.services.skills.market_analysis_skill import (
         MarketTrend, CompetitorAnalysis, BuyerPersona, AssetRecommendation
     )
-    from app.agents.skills.privacy_skill import (
+    from app.services.skills.privacy_skill import (
         ProtocolRecommendation, AnonymizationResult, SensitivityAssessment
     )
-    from app.agents.skills.audit_skill import (
+    from app.services.skills.audit_skill import (
         RiskAssessment, AccessSummary, ComplianceStatus
     )
 

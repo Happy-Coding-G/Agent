@@ -144,11 +144,11 @@ print("=" * 70)
 def test_skill_dataclasses():
     """测试 Skill 数据结构"""
     try:
-        from app.agents.skills.pricing_skill import PriceSuggestion, MarketAnalysis
-        from app.agents.skills.lineage_skill import LineageSummary, QualityAssessment
-        from app.agents.skills.market_analysis_skill import MarketTrend, CompetitorAnalysis
-        from app.agents.skills.privacy_skill import SensitivityAssessment
-        from app.agents.skills.audit_skill import RiskAssessment
+        from app.services.skills.pricing_skill import PriceSuggestion, MarketAnalysis
+        from app.services.skills.lineage_skill import LineageSummary, QualityAssessment
+        from app.services.skills.market_analysis_skill import MarketTrend, CompetitorAnalysis
+        from app.services.skills.privacy_skill import SensitivityAssessment
+        from app.services.skills.audit_skill import RiskAssessment
 
         # 测试创建实例
         price = PriceSuggestion(

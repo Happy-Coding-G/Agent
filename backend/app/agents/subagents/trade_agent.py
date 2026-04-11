@@ -22,7 +22,7 @@ from app.services.base import SpaceAwareService
 from app.services.asset_service import AssetService
 from app.repositories.trade_repo import TradeRepository
 from app.utils.sanitizer import redact_sensitive_info, compact_text
-from app.agents.skills import (
+from app.services.skills import (
     PricingSkill,
     DataLineageSkill,
     MarketAnalysisSkill,
