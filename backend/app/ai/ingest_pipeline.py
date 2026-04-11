@@ -194,10 +194,9 @@ async def extract_text_runnable(ctx: IngestContext) -> IngestContext:
     提取文本 Runnable - 分层转换策略
 
     策略:
-    1. 优先使用专用工具 (Pandoc/html2text) 转换 Markdown
-    2. 次选专业库 (pdfminer) 提取文本
-    3. 降级到 LangChain Loaders
-    4. 最后手段才用 LLM (仅 OCR/乱码)
+    1. 优先使用专用工具 (Pandoc/html2text/统一 PDF 管线) 转换 Markdown
+    2. 降级到 LangChain Loaders
+    3. 最后手段才用 LLM (仅 OCR/乱码)
     """
     if not ctx.file_bytes or not ctx.filename:
         logger.error("[Extract] File not downloaded")
@@ -289,17 +288,17 @@ async def extract_text_runnable(ctx: IngestContext) -> IngestContext:
             ctx.raw_text = "\n\n".join(d.page_content for d in docs)
             conversion_method = "textloader"
 
-    # PDF -> 使用 pdfminer (保留文本结构)
+    # PDF -> 使用统一 PDF 处理管线
     elif suffix == ".pdf":
         logger.info(f"[Extract] Processing as PDF")
         result = convert_pdf_to_markdown(ctx.file_path)
         if result:
             ctx.raw_text = result
-            conversion_method = "pdfminer"
-            logger.info(f"[Extract] pdfminer conversion successful")
+            conversion_method = "pdf_pipeline"
+            logger.info(f"[Extract] unified PDF pipeline conversion successful")
         else:
             # 降级到 PyPDFLoader
-            logger.info(f"[Extract] pdfminer failed, falling back to PyPDFLoader")
+            logger.info(f"[Extract] unified PDF pipeline failed, falling back to PyPDFLoader")
             from langchain_community.document_loaders import PyPDFLoader
             loader = PyPDFLoader(str(ctx.file_path))
             docs = loader.load()

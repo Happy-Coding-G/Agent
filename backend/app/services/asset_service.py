@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.core.errors import ServiceError
 from app.db.models import Documents, Users
 from app.services.base import SpaceAwareService, get_llm_client, preview_text
-from app.services.graph_service import KnowledgeGraphService
+from app.services.graph.graph_service import KnowledgeGraphService
 from app.utils.state_store import load_state, save_state
 
 

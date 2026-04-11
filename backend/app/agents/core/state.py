@@ -130,14 +130,6 @@ class TradeState(TypedDict):
 # Hybrid Market Negotiation Architecture - New State Types
 # ============================================================================
 
-class MarketMechanismType(str, Enum):
-    """Types of market mechanisms supported."""
-    CONTRACT_NET = "contract_net"      # 合同网: announce → bid → award
-    AUCTION = "auction"                 # 拍卖: one-to-many / many-to-many
-    BILATERAL = "bilateral"             # 双边协商: multi-round negotiation
-    FIXED_PRICE = "fixed_price"         # 固定价格: direct purchase
-
-
 class NegotiationStatus(str, Enum):
     """Status of a negotiation session."""
     PENDING = "pending"                 # 待开始
@@ -223,69 +215,6 @@ class BuyerAgentState(TypedDict):
     submitted_bids: List[Dict[str, Any]]     # 已提交的投标
     awarded_contracts: List[Dict[str, Any]]  # 已获得的合同
 
-
-class ContractNetState(TypedDict):
-    """State for Contract Net Protocol (合同网机制)."""
-    # Announce phase
-    announcement: Optional[Dict[str, Any]]   # 公告内容
-    eligibility_criteria: Dict[str, Any]     # 资格条件
-    deadline: Optional[str]                  # 投标截止日期
-
-    # Bid phase
-    received_bids: List[Dict[str, Any]]      # 收到的投标
-    bid_evaluation_criteria: Dict[str, Any]  # 评估标准
-
-    # Award phase
-    awarded_bids: List[Dict[str, Any]]       # 已授予的投标
-    rejected_bids: List[Dict[str, Any]]      # 拒绝的投标
-
-    # Protocol state
-    phase: str                               # "announce", "bidding", "evaluating", "awarding", "completed"
-
-
-class AuctionState(TypedDict):
-    """State for Auction Mechanism (拍卖机制)."""
-    # Auction configuration
-    auction_type: str                    # "english", "dutch", "sealed", "vickrey"
-    starting_price: float
-    reserve_price: float
-    price_increment: float               # 价格增量
-
-    # Auction progress
-    current_price: float
-    current_winner: Optional[int]        # 当前领先者
-    bid_count: int
-
-    # Bids
-    bid_history: List[Dict[str, Any]]    # 出价历史 (按时间)
-    ranked_bids: List[Dict[str, Any]]    # 排序后的出价
-
-    # Time control
-    start_time: Optional[str]
-    end_time: Optional[str]
-    auto_extend: bool                    # 是否自动延长
-
-    # Result
-    final_price: Optional[float]
-    winner_id: Optional[int]
-    settlement_pending: bool
-
-
-class BilateralNegotiationState(TypedDict):
-    """State for Bilateral Negotiation (双边协商)."""
-    # Parties
-    seller_id: int
-    buyer_id: int
-
-    # Negotiation items
-    negotiating_price: bool
-    negotiating_terms: bool
-    negotiating_delivery: bool
-
-    # Round tracking
-    rounds: List[Dict[str, Any]]         # 每轮的详细记录
-    current_round: int
-    max_rounds: int
 
     # Current offers
     seller_offer: Optional[Dict[str, Any]]   # 卖方当前报价

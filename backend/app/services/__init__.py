@@ -10,14 +10,19 @@ from .base import SpaceAwareService
 # Domain services
 from .asset_service import AssetService
 from .auth_service import AuthService
-from .chat_service import ChatService
 from .collaboration_service import CollaborationService
-from .file_service import FileService
-from .graph_service import GraphService
 from .ingest_service import IngestService
 from .lineage_service import LineageService
-from .markdown_service import MarkdownService
-from .space_service import SpaceService
+from .markdown_service import MarkdownDocumentService as MarkdownService
+
+# File service from submodule
+from .file import FileService
+
+# Graph service from submodule
+from .graph import KnowledgeGraphService
+
+# Space service from submodule
+from .space import SpaceService
 
 # Trade services
 from .trade import (
@@ -33,10 +38,9 @@ __all__ = [
     # Domain
     "AssetService",
     "AuthService",
-    "ChatService",
     "CollaborationService",
     "FileService",
-    "GraphService",
+    "KnowledgeGraphService",
     "IngestService",
     "LineageService",
     "MarkdownService",

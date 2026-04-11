@@ -1,53 +1,56 @@
 """
-Trade Agent Worker - Background task processor for multi-agent negotiation.
+Trade Agent Worker V2 - Event-driven background task processor.
 
-解决不同用户Agent的异步执行问题：
-- 定期轮询消息队列
-- 根据用户配置自动执行Agent决策
-- 支持自动模式和人工干预模式
+基于事件溯源的Agent自动决策：
+- 轮询活跃协商会话
+- 获取最新BlackboardEvents
+- 根据状态投影和用户配置自动响应
+- 防止自循环（不对自己发出的事件响应）
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.trade import NegotiationService
-from app.db.models import AgentMessageQueue, UserAgentConfig, NegotiationSessions
+from app.services.trade.trade_negotiation_service import TradeNegotiationService
+from app.db.models import UserAgentConfig, NegotiationSessions
 from app.core.errors import ServiceError
-from .trade_graph import MessageType
 
 logger = logging.getLogger(__name__)
 
 
 class TradeAgentWorker:
     """
-    交易Agent工作器 - 后台自动处理协商消息。
+    交易Agent工作器V2 - 基于事件溯源的后台自动处理。
 
     运行逻辑：
-    1. 轮询待处理消息 (AgentMessageQueue)
-    2. 根据消息类型和用户配置执行决策
-    3. 发送响应消息
-    4. 支持自动/半自动/人工三种模式
+    1. 轮询活跃协商会话 (status in ["pending", "active"])
+    2. 获取每个会话的最新BlackboardEvents
+    3. 通过state_projector计算current_turn
+    4. 加载用户AgentConfig
+    5. 若use_llm_decision=True且轮到该用户，自动响应
+    6. 防止自循环：不对自己发出的事件做响应
     """
 
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.negotiation_service = NegotiationService(db)
+        self.negotiation_service = TradeNegotiationService(db)
         self.running = False
         self.worker_id = f"worker_{id(self)}"
 
     async def start(self, poll_interval: float = 5.0):
         """启动Worker。"""
         self.running = True
-        logger.info(f"TradeAgentWorker {self.worker_id} started")
+        logger.info(f"TradeAgentWorkerV2 {self.worker_id} started")
 
         while self.running:
             try:
-                await self._process_pending_messages()
+                await self._process_new_events()
                 await self._check_expired_negotiations()
             except Exception as e:
                 logger.exception(f"Worker error: {e}")
@@ -57,235 +60,306 @@ class TradeAgentWorker:
     def stop(self):
         """停止Worker。"""
         self.running = False
-        logger.info(f"TradeAgentWorker {self.worker_id} stopped")
+        logger.info(f"TradeAgentWorkerV2 {self.worker_id} stopped")
 
-    async def _process_pending_messages(self):
-        """处理待处理消息。"""
+    async def _process_new_events(self):
+        """
+        处理新事件 - 事件驱动核心逻辑。
+
+        流程：
+        1. 查询活跃协商会话
+        2. 对每个会话获取最新事件
+        3. 根据状态决定是否需要自动响应
+        4. 加载用户配置
+        5. 执行自动决策
+        """
         from sqlalchemy import select, and_
 
-        # 获取所有待处理消息
-        stmt = (
-            select(AgentMessageQueue)
-            .where(AgentMessageQueue.status == "pending")
-            .order_by(AgentMessageQueue.priority.desc(), AgentMessageQueue.created_at.asc())
-            .limit(10)
+        # 查询活跃协商
+        stmt = select(NegotiationSessions).where(
+            and_(
+                NegotiationSessions.status.in_(["pending", "active"]),
+                NegotiationSessions.expires_at > datetime.now(timezone.utc),
+            )
         )
         result = await self.db.execute(stmt)
-        messages = result.scalars().all()
+        sessions = result.scalars().all()
 
-        for msg in messages:
+        if not sessions:
+            return
+
+        logger.debug(f"Processing {len(sessions)} active sessions")
+
+        for session in sessions:
             try:
-                await self._handle_message(msg)
+                await self._process_session(session)
             except Exception as e:
-                logger.exception(f"Failed to process message {msg.message_id}: {e}")
-                await self.negotiation_service.mark_message_processed(
-                    msg.message_id,
-                    self.worker_id,
-                    error=str(e),
-                )
+                logger.exception(f"Failed to process session {session.negotiation_id}: {e}")
 
-    async def _handle_message(self, msg: AgentMessageQueue):
-        """处理单条消息。"""
-        logger.info(f"Processing message {msg.message_id}: {msg.msg_type}")
+    async def _process_session(self, session: NegotiationSessions):
+        """处理单个协商会话。"""
+        negotiation_id = session.negotiation_id
 
-        # 获取用户Agent配置
+        # 获取当前状态投影
+        state = await self.negotiation_service.state_projector.project_negotiation_state(
+            negotiation_id
+        )
+        if not state:
+            return
+
+        # 确定当前轮到谁
+        current_turn = state.current_turn
+        if not current_turn:
+            return
+
+        # 确定当前应该行动的用户ID
+        if current_turn == "seller":
+            current_user_id = state.seller_id
+        elif current_turn == "buyer":
+            current_user_id = state.buyer_id
+        else:
+            return
+
+        if not current_user_id:
+            return
+
+        # 获取最新事件（用于防止自循环）
+        latest_events = await self.negotiation_service.event_store.get_events(
+            negotiation_id, start_seq=0
+        )
+        if not latest_events:
+            return
+
+        latest_event = latest_events[-1]
+
+        # 防止自循环：如果最新事件就是自己发出的，不响应
+        if latest_event.agent_id == current_user_id:
+            logger.debug(f"Skipping self-event for user {current_user_id}")
+            return
+
+        # 加载用户Agent配置
         config = await self.negotiation_service.get_or_create_agent_config(
-            msg.to_agent_user_id,
-            "buyer" if msg.msg_type in ["ANNOUNCE", "COUNTER", "ACCEPT", "REJECT"] else "seller",
+            current_user_id, current_turn
         )
 
         # 检查是否自动处理
         if not config.use_llm_decision:
-            # 人工模式 - 不自动处理，等待用户操作
-            logger.info(f"User {msg.to_agent_user_id} is in manual mode, skipping auto-processing")
+            logger.debug(f"User {current_user_id} is in manual mode, skipping")
             return
 
-        # 自动处理消息
-        handler = self._get_handler(msg.msg_type)
-        if handler:
-            await handler(msg, config)
-
-        # 标记为已处理
-        await self.negotiation_service.mark_message_processed(
-            msg.message_id,
-            self.worker_id,
+        # 根据事件类型和当前回合执行自动决策
+        await self._execute_auto_decision(
+            negotiation_id=negotiation_id,
+            session=session,
+            state=state,
+            latest_event=latest_event,
+            current_user_id=current_user_id,
+            current_turn=current_turn,
+            config=config,
         )
 
-    def _get_handler(self, msg_type: str):
-        """获取消息处理器。"""
-        handlers = {
-            MessageType.ANNOUNCE.value: self._handle_announce,
-            MessageType.BID.value: self._handle_bid,
-            MessageType.OFFER.value: self._handle_offer,
-            MessageType.COUNTER.value: self._handle_counter,
-        }
-        return handlers.get(msg_type)
+    async def _execute_auto_decision(
+        self,
+        negotiation_id: str,
+        session: NegotiationSessions,
+        state,
+        latest_event,
+        current_user_id: int,
+        current_turn: str,
+        config: UserAgentConfig,
+    ):
+        """执行自动决策。"""
+        event_type = latest_event.event_type
 
-    async def _handle_announce(self, msg: AgentMessageQueue, config: UserAgentConfig):
-        """
-        Buyer Agent 处理卖方公告。
+        try:
+            # 买方决策场景
+            if current_turn == "buyer":
+                if event_type in ["ANNOUNCE", "COUNTER"]:
+                    # 评估并投标/出价
+                    await self._buyer_respond_to_offer(
+                        negotiation_id, session, state, current_user_id, config
+                    )
+                elif event_type == "OFFER" and latest_event.agent_role == "seller":
+                    # 卖方出价，买方决定接受/拒绝/反报价
+                    await self._buyer_evaluate_offer(
+                        negotiation_id, state, current_user_id, config
+                    )
 
-        决策逻辑：
-        1. 评估资产是否符合需求
-        2. 评估价格是否在预算内
-        3. 决定是否投标
-        """
-        negotiation = await self.negotiation_service.get_negotiation(msg.negotiation_id)
-        if not negotiation:
-            return
+            # 卖方决策场景
+            elif current_turn == "seller":
+                if event_type in ["BID", "OFFER"] and latest_event.agent_role == "buyer":
+                    # 买方投标/出价，卖方决定接受/拒绝/反报价
+                    await self._seller_evaluate_bid(
+                        negotiation_id, session, state, latest_event, current_user_id, config
+                    )
 
-        payload = msg.payload
-        starting_price = payload.get("starting_price", 0)
+        except ServiceError as e:
+            logger.warning(f"Auto-decision failed for {negotiation_id}: {e}")
+        except Exception as e:
+            logger.exception(f"Unexpected error in auto-decision: {e}")
+
+    async def _buyer_respond_to_offer(
+        self,
+        negotiation_id: str,
+        session: NegotiationSessions,
+        state,
+        buyer_id: int,
+        config: UserAgentConfig,
+    ):
+        """买方响应卖方公告或反报价。"""
+        # 获取当前价格
+        current_price = state.current_price / 100 if state.current_price else 0
 
         # 检查预算
-        # TODO: Get buyer's budget from config or user profile
         max_budget = config.auto_accept_threshold or 1000.0
 
-        if starting_price > max_budget * 1.2:
-            logger.info(f"Buyer {msg.to_agent_user_id}: Announcement price {starting_price} exceeds budget")
+        if current_price > max_budget * 1.2:
+            logger.info(f"Buyer {buyer_id}: Price {current_price} exceeds budget")
             return
 
-        # 自动投标
-        bid_amount = min(starting_price * 1.1, max_budget * 0.9)
+        # 自动出价
+        if session.mechanism_type == "auction":
+            # 拍卖：出价略高于当前价格
+            bid_amount = min(current_price * 1.1, max_budget * 0.9)
+            if bid_amount <= current_price:
+                bid_amount = current_price + 1.0
 
-        await self.negotiation_service.buyer_place_bid(
-            negotiation_id=msg.negotiation_id,
-            buyer_user_id=msg.to_agent_user_id,
-            amount=bid_amount,
-            qualifications={"auto": True, "agent_config": config.pricing_strategy},
-        )
+            await self.negotiation_service.buyer_place_bid(
+                negotiation_id=negotiation_id,
+                buyer_user_id=buyer_id,
+                amount=bid_amount,
+                qualifications={"auto": True, "agent_config": config.pricing_strategy},
+            )
+            logger.info(f"Buyer {buyer_id}: Auto-placed bid {bid_amount}")
 
-        logger.info(f"Buyer {msg.to_agent_user_id}: Auto-placed bid {bid_amount}")
+        else:
+            # 协商：提出初始报价
+            offer_price = min(current_price * 0.95, max_budget * 0.9)
+            if offer_price <= 0:
+                offer_price = max_budget * 0.8
 
-    async def _handle_bid(self, msg: AgentMessageQueue, config: UserAgentConfig):
-        """
-        Seller Agent 处理买方投标。
+            await self.negotiation_service.buyer_make_offer(
+                negotiation_id=negotiation_id,
+                buyer_user_id=buyer_id,
+                price=offer_price,
+                message="Auto-generated offer",
+            )
+            logger.info(f"Buyer {buyer_id}: Auto-made offer {offer_price}")
 
-        决策逻辑：
-        1. 评估出价是否达到底价
-        2. 根据策略决定接受/拒绝/反报价
-        """
-        negotiation = await self.negotiation_service.get_negotiation(msg.negotiation_id)
-        if not negotiation:
+    async def _buyer_evaluate_offer(
+        self,
+        negotiation_id: str,
+        state,
+        buyer_id: int,
+        config: UserAgentConfig,
+    ):
+        """买方评估卖方报价。"""
+        current_price = state.current_price / 100 if state.current_price else 0
+        max_budget = config.auto_accept_threshold or 1000.0
+
+        # 检查轮数限制
+        if state.current_round >= config.max_auto_rounds:
+            logger.info(f"Buyer {buyer_id}: Max rounds reached, stopping auto-negotiation")
             return
 
-        payload = msg.payload
-        bid_amount = payload.get("amount", 0)
-        reserve_price = (negotiation.reserve_price or 0) / 100
+        # 决策逻辑
+        if current_price <= max_budget * 0.95:
+            # 接受报价
+            await self.negotiation_service.accept_offer_v2(
+                negotiation_id=negotiation_id,
+                agent_id=buyer_id,
+            )
+            logger.info(f"Buyer {buyer_id}: Auto-accepted offer at {current_price}")
+
+        elif current_price <= max_budget:
+            # 反报价
+            counter_price = (current_price + max_budget) / 2
+            await self.negotiation_service.buyer_make_offer(
+                negotiation_id=negotiation_id,
+                buyer_user_id=buyer_id,
+                price=counter_price,
+                message="Counter offer",
+            )
+            logger.info(f"Buyer {buyer_id}: Auto-countered with {counter_price}")
+
+        else:
+            logger.info(f"Buyer {buyer_id}: Offer {current_price} exceeds budget, no action")
+
+    async def _seller_evaluate_bid(
+        self,
+        negotiation_id: str,
+        session: NegotiationSessions,
+        state,
+        latest_event,
+        seller_id: int,
+        config: UserAgentConfig,
+    ):
+        """卖方评估买方投标/出价。"""
+        # 获取报价
+        payload = latest_event.payload
+        bid_amount = payload.get("price", 0)
+        reserve_price = (session.reserve_price or 0) / 100
+
+        if bid_amount <= 0:
+            bid_amount = state.current_price / 100 if state.current_price else 0
 
         # 决策逻辑
         if bid_amount >= reserve_price * (config.auto_accept_threshold or 0.95):
             # 自动接受
             await self.negotiation_service.seller_respond_to_bid(
-                negotiation_id=msg.negotiation_id,
-                seller_user_id=msg.to_agent_user_id,
+                negotiation_id=negotiation_id,
+                seller_user_id=seller_id,
                 response="accept",
             )
-            logger.info(f"Seller {msg.to_agent_user_id}: Auto-accepted bid {bid_amount}")
+            logger.info(f"Seller {seller_id}: Auto-accepted bid {bid_amount}")
 
         elif bid_amount >= reserve_price * (config.auto_counter_threshold or 0.8):
             # 自动反报价
             counter_amount = (bid_amount + reserve_price) / 2
             await self.negotiation_service.seller_respond_to_bid(
-                negotiation_id=msg.negotiation_id,
-                seller_user_id=msg.to_agent_user_id,
+                negotiation_id=negotiation_id,
+                seller_user_id=seller_id,
                 response="counter",
                 counter_amount=counter_amount,
             )
-            logger.info(f"Seller {msg.to_agent_user_id}: Auto-countered bid {bid_amount} with {counter_amount}")
+            logger.info(f"Seller {seller_id}: Auto-countered bid {bid_amount} with {counter_amount}")
 
         else:
             # 拒绝
             await self.negotiation_service.seller_respond_to_bid(
-                negotiation_id=msg.negotiation_id,
-                seller_user_id=msg.to_agent_user_id,
+                negotiation_id=negotiation_id,
+                seller_user_id=seller_id,
                 response="reject",
             )
-            logger.info(f"Seller {msg.to_agent_user_id}: Auto-rejected bid {bid_amount}")
-
-    async def _handle_offer(self, msg: AgentMessageQueue, config: UserAgentConfig):
-        """Seller Agent 处理买方主动报价（双边协商）。"""
-        negotiation = await self.negotiation_service.get_negotiation(msg.negotiation_id)
-        if not negotiation:
-            return
-
-        payload = msg.payload
-        offer_price = payload.get("price", 0)
-        reserve_price = (negotiation.reserve_price or 0) / 100
-
-        # 类似BID的处理逻辑
-        if offer_price >= reserve_price * 0.95:
-            # 接受
-            await self.negotiation_service.seller_respond_to_bid(
-                negotiation_id=msg.negotiation_id,
-                seller_user_id=msg.to_agent_user_id,
-                response="accept",
-            )
-        elif offer_price >= reserve_price * 0.8:
-            # 反报价
-            counter = (offer_price + reserve_price) / 2
-            await self.negotiation_service.seller_respond_to_bid(
-                negotiation_id=msg.negotiation_id,
-                seller_user_id=msg.to_agent_user_id,
-                response="counter",
-                counter_amount=counter,
-            )
-
-    async def _handle_counter(self, msg: AgentMessageQueue, config: UserAgentConfig):
-        """
-        Buyer Agent 处理卖方反报价。
-
-        决策逻辑：
-        1. 检查反报价是否在预算内
-        2. 检查是否超过最大轮数
-        3. 决定接受/继续协商/退出
-        """
-        negotiation = await self.negotiation_service.get_negotiation(msg.negotiation_id)
-        if not negotiation:
-            return
-
-        payload = msg.payload
-        counter_amount = payload.get("counter_amount", 0)
-
-        # 检查是否超过最大轮数
-        if negotiation.current_round >= config.max_auto_rounds:
-            logger.info(f"Buyer {msg.to_agent_user_id}: Max rounds reached, stopping auto-negotiation")
-            return
-
-        # 检查预算
-        max_budget = config.auto_accept_threshold or 1000.0
-
-        if counter_amount <= max_budget * 0.95:
-            # 接受反报价
-            # 注意：这里需要一个新的方法buyer_accept_counter
-            logger.info(f"Buyer {msg.to_agent_user_id}: Would accept counter {counter_amount}")
-        elif counter_amount <= max_budget:
-            # 继续出价
-            new_offer = (counter_amount + max_budget) / 2
-            await self.negotiation_service.buyer_make_offer(
-                negotiation_id=msg.negotiation_id,
-                buyer_user_id=msg.to_agent_user_id,
-                price=new_offer,
-            )
-            logger.info(f"Buyer {msg.to_agent_user_id}: Counter-offered with {new_offer}")
+            logger.info(f"Seller {seller_id}: Auto-rejected bid {bid_amount}")
 
     async def _check_expired_negotiations(self):
         """检查并处理过期的协商。"""
         from sqlalchemy import select, and_
 
-        stmt = (
-            select(NegotiationSessions)
-            .where(
-                and_(
-                    NegotiationSessions.status.in_(["pending", "active"]),
-                    NegotiationSessions.expires_at < datetime.now(timezone.utc),
-                )
+        stmt = select(NegotiationSessions).where(
+            and_(
+                NegotiationSessions.status.in_(["pending", "active"]),
+                NegotiationSessions.expires_at < datetime.now(timezone.utc),
             )
         )
         result = await self.db.execute(stmt)
         expired = result.scalars().all()
 
         for session in expired:
+            # 追加TIMEOUT事件
+            try:
+                await self.negotiation_service.event_store.append_event(
+                    session_id=session.negotiation_id,
+                    session_type="negotiation",
+                    event_type="TIMEOUT",
+                    agent_id=0,
+                    agent_role="system",
+                    payload={"reason": "negotiation_expired"},
+                )
+            except Exception as e:
+                logger.warning(f"Failed to append TIMEOUT event: {e}")
+
             session.status = "terminated"
             logger.info(f"Negotiation {session.negotiation_id} expired and terminated")
 

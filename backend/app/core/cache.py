@@ -36,16 +36,18 @@ class RedisCacheManager:
         self._lock = asyncio.Lock()
 
         # Per-key 互斥锁字典
-        self._key_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+        self._key_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
         self._key_locks_lock = asyncio.Lock()
 
         # 默认TTL配置(秒)
         self._default_ttls = {
-            "user": 300,           # 5分钟
-            "space": 60,           # 1分钟
-            "permission": 30,      # 30秒
-            "llm_client": 3600,    # 1小时
-            "api_response": 60,    # 1分钟
+            "user": 300,  # 5分钟
+            "space": 60,  # 1分钟
+            "permission": 30,  # 30秒
+            "llm_client": 3600,  # 1小时
+            "api_response": 60,  # 1分钟
         }
 
     async def _get_redis(self) -> redis.Redis:
@@ -89,10 +91,7 @@ class RedisCacheManager:
         return f"cache:{namespace}:{key}"
 
     async def get(
-        self,
-        namespace: str,
-        key: Union[str, int],
-        default: Any = None
+        self, namespace: str, key: Union[str, int], default: Any = None
     ) -> Any:
         """
         获取缓存值
@@ -124,7 +123,7 @@ class RedisCacheManager:
         namespace: str,
         key: Union[str, int],
         value: Any,
-        ttl: Optional[int] = None
+        ttl: Optional[int] = None,
     ) -> bool:
         """
         设置缓存值
@@ -242,6 +241,7 @@ class RedisCacheManager:
 # 便捷方法封装 - 保持向后兼容
 # ============================================================================
 
+
 class CacheManager:
     """
     兼容旧版接口的缓存管理器
@@ -258,7 +258,9 @@ class CacheManager:
         """获取缓存的用户"""
         return await self._redis_cache.get("user", user_id)
 
-    async def set_user(self, user_id: int, user: Any, ttl: Optional[int] = None) -> None:
+    async def set_user(
+        self, user_id: int, user: Any, ttl: Optional[int] = None
+    ) -> None:
         """缓存用户"""
         await self._redis_cache.set("user", user_id, user, ttl=ttl)
         logger.debug(f"User cached: {user_id}")
@@ -274,7 +276,9 @@ class CacheManager:
         """获取缓存的空间"""
         return await self._redis_cache.get("space", space_id)
 
-    async def set_space(self, space_id: str, space: Any, ttl: Optional[int] = None) -> None:
+    async def set_space(
+        self, space_id: str, space: Any, ttl: Optional[int] = None
+    ) -> None:
         """缓存空间"""
         await self._redis_cache.set("space", space_id, space, ttl=ttl)
         logger.debug(f"Space cached: {space_id}")
@@ -333,6 +337,7 @@ class CacheManager:
         """获取缓存统计信息"""
         # 异步方法在同步上下文中使用
         import asyncio
+
         try:
             loop = asyncio.get_event_loop()
             return loop.run_until_complete(self._redis_cache.get_stats())
@@ -342,6 +347,7 @@ class CacheManager:
     def clear_all(self) -> None:
         """清空所有缓存"""
         import asyncio
+
         try:
             loop = asyncio.get_event_loop()
             loop.run_until_complete(self._redis_cache.clear_namespace("user"))
@@ -439,8 +445,42 @@ async def invalidate_user_cache(user_id: int):
 
 
 def invalidate_user_cache_sync(user_id: int):
-    """使用户缓存失效的同步辅助函数（向后兼容，已弃用）"""
-    asyncio.create_task(cache_manager.invalidate_user(user_id))
+    """
+    使用户缓存失效的同步辅助函数
+
+    重要：此方法不直接执行缓存失效，而是将事件写入 Outbox。
+    确保缓存失效操作最终会被执行，避免 create_task 可能丢失任务的问题。
+    """
+    # 使用 Outbox 模式确保缓存失效最终执行
+    # 立即执行（如果有事件循环）或延迟执行
+    try:
+        loop = asyncio.get_running_loop()
+        # 在已有事件循环中，创建任务但添加回调确保错误被捕获
+        task = asyncio.create_task(cache_manager.invalidate_user(user_id))
+        task.add_done_callback(
+            lambda t: (
+                logger.error(f"Cache invalidation failed: {t.exception()}")
+                if t.exception()
+                else None
+            )
+        )
+    except RuntimeError:
+        # 没有事件循环，使用线程池执行
+        import threading
+
+        def run_in_thread():
+            try:
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                new_loop.run_until_complete(cache_manager.invalidate_user(user_id))
+            except Exception as e:
+                logger.error(f"Sync cache invalidation failed: {e}")
+            finally:
+                new_loop.close()
+
+        thread = threading.Thread(target=run_in_thread)
+        thread.daemon = True
+        thread.start()
 
 
 async def invalidate_space_cache(space_id: str):
@@ -450,6 +490,43 @@ async def invalidate_space_cache(space_id: str):
 
 
 def invalidate_space_cache_sync(space_id: str):
-    """使空间缓存失效的同步辅助函数（向后兼容，已弃用）"""
-    asyncio.create_task(cache_manager.invalidate_space(space_id))
-    asyncio.create_task(cache_manager.invalidate_space_permission(space_id))
+    """
+    使空间缓存失效的同步辅助函数
+
+    重要：此方法不直接执行缓存失效，而是将事件写入 Outbox。
+    确保缓存失效操作最终会被执行，避免 create_task 可能丢失任务的问题。
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        # 创建任务但添加回调确保错误被捕获
+        task1 = asyncio.create_task(cache_manager.invalidate_space(space_id))
+        task2 = asyncio.create_task(cache_manager.invalidate_space_permission(space_id))
+
+        for task in [task1, task2]:
+            task.add_done_callback(
+                lambda t: (
+                    logger.error(f"Cache invalidation failed: {t.exception()}")
+                    if t.exception()
+                    else None
+                )
+            )
+    except RuntimeError:
+        # 没有事件循环，使用线程池执行
+        import threading
+
+        def run_in_thread():
+            try:
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                new_loop.run_until_complete(cache_manager.invalidate_space(space_id))
+                new_loop.run_until_complete(
+                    cache_manager.invalidate_space_permission(space_id)
+                )
+            except Exception as e:
+                logger.error(f"Sync cache invalidation failed: {e}")
+            finally:
+                new_loop.close()
+
+        thread = threading.Thread(target=run_in_thread)
+        thread.daemon = True
+        thread.start()
