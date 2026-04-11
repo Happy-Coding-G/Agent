@@ -189,30 +189,23 @@ def convert_html_to_markdown(file_path: Path) -> Optional[str]:
 
 def convert_pdf_to_markdown(file_path: Path) -> Optional[str]:
     """
-    使用 markitdown 将 PDF 转换为 Markdown
+    使用统一 PDF 处理管线将 PDF 转换为 Markdown
     返回 None 表示失败
 
-    markitdown 效果优于 pdfminer:
-    - 能识别表格并转换为 Markdown 表格格式
-    - 能保留代码块的标记
-    - 能识别标题层级结构
-    - 支持图片 Alt 文字提取
+    统一方案：
+    1. markitdown 负责基础提取
+    2. 轻量级后处理负责页眉页脚清洗、断词修复、标题规整
+    3. 可选表格提取负责结构化表格恢复
     """
     try:
-        from markitdown import MarkItDown
+        from app.ai.pdf_processing import convert_pdf_to_markdown as unified_convert_pdf_to_markdown
 
-        converter = MarkItDown()
-        result = converter.convert(str(file_path))
-
-        if result and result.text_content and result.text_content.strip():
-            logger.info(f"markitdown successfully converted PDF: {file_path.name}")
-            return result.text_content.strip()
-        return None
-    except ImportError:
-        logger.warning("markitdown not installed, PDF conversion unavailable")
-        return None
+        markdown = unified_convert_pdf_to_markdown(file_path)
+        if markdown:
+            logger.info(f"unified PDF pipeline successfully converted: {file_path.name}")
+        return markdown
     except Exception as e:
-        logger.warning(f"markitdown PDF conversion failed: {e}")
+        logger.warning(f"unified PDF pipeline failed: {e}")
         return None
 
 

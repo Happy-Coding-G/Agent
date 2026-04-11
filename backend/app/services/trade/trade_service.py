@@ -4,17 +4,16 @@ Replaces file-based state with database transactions.
 """
 from __future__ import annotations
 
-import uuid
 import hashlib
 import re
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from typing import Optional, List, Dict, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
-from app.repositories.trade_repo import TradeRepository, cents_to_credits, credits_to_cents
+from app.repositories.trade_repo import TradeRepository, cents_to_credits
 from app.db.models import TradeListings, Users
 from app.core.errors import ServiceError
 from ..asset_service import AssetService

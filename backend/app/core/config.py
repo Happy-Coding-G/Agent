@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit, quote
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -31,12 +33,16 @@ class Settings(BaseSettings):
     # Remote Embedding (Qwen3-Embedding-4B)
     REMOTE_EMBEDDING_ENABLED: bool = Field(default=True)
     REMOTE_EMBEDDING_BASE_URL: str = Field(default="http://10.211.77.10:27701")
-    REMOTE_EMBEDDING_MODEL: str = Field(default="/gemini/data-1/Qwen3-emb-4b/Qwen/Qwen3-Embedding-4B/")
+    REMOTE_EMBEDDING_MODEL: str = Field(
+        default="/gemini/data-1/Qwen3-emb-4b/Qwen/Qwen3-Embedding-4B/"
+    )
 
     # Remote Rerank (Qwen3-Reranker-4B)
-    REMOTE_RERANK_ENABLED: bool = Field(default=True)
+    REMOTE_RERANK_ENABLED: bool = Field(default=False)  # 暂时禁用rerank服务
     REMOTE_RERANK_BASE_URL: str = Field(default="http://10.211.77.10:29639")
-    REMOTE_RERANK_MODEL: str = Field(default="/gemini/data-1/Qwen3-rerank-4b/Qwen/Qwen3-Reranker-4B/")
+    REMOTE_RERANK_MODEL: str = Field(
+        default="/gemini/data-1/Qwen3-rerank-4b/Qwen/Qwen3-Reranker-4B/"
+    )
 
     # Neo4j
     NEO4J_URI: str = Field(default="bolt://127.0.0.1:7687")
@@ -54,7 +60,7 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE: int = Field(default=3600, description="连接回收时间(秒)")
 
     # 只读副本配置（可选，用于读写分离）
-    READ_REPLICA_URL: str | None = Field(default=None, description="只读副本数据库URL")
+    READ_REPLICA_URL: Optional[str] = Field(default=None, description="只读副本数据库URL")
 
     # 文档摄取配置 - 默认异步摄取提高并发吞吐
     SYNC_INGEST: bool = Field(default=False, description="是否使用同步摄取(默认异步)")
@@ -62,9 +68,13 @@ class Settings(BaseSettings):
     # 聊天队列配置 - 高并发场景使用队列削峰
     CHAT_QUEUE_ENABLED: bool = Field(default=False, description="是否启用聊天队列模式")
     CHAT_QUEUE_MODE: str = Field(default="sync", description="聊天队列模式: sync/queue")
-    CHAT_QUEUE_POLL_INTERVAL: float = Field(default=0.5, description="队列结果轮询间隔(秒)")
+    CHAT_QUEUE_POLL_INTERVAL: float = Field(
+        default=0.5, description="队列结果轮询间隔(秒)"
+    )
     CHAT_QUEUE_MAX_POLLS: int = Field(default=120, description="队列结果最大轮询次数")
-    CHAT_QUEUE_SYNC_THRESHOLD: int = Field(default=100, description="低于此并发量用同步模式")
+    CHAT_QUEUE_SYNC_THRESHOLD: int = Field(
+        default=100, description="低于此并发量用同步模式"
+    )
 
     def _normalize_async_database_url(self, raw_url: str) -> str:
         if raw_url.startswith("postgresql+asyncpg://"):
@@ -80,17 +90,19 @@ class Settings(BaseSettings):
 
         # Check if credentials need encoding (contain unencoded special chars like @)
         if parsed.username is not None:
-            password = parsed.password or ''
+            password = parsed.password or ""
             # Only re-encode if the @ symbol appears unencoded (not as %40)
-            if '@' in password and '%40' not in password and '%2540' not in password:
+            if "@" in password and "%40" not in password and "%2540" not in password:
                 # Password contains raw @, need to encode it
-                username = quote(parsed.username, safe='')
-                password = quote(password, safe='')
+                username = quote(parsed.username, safe="")
+                password = quote(password, safe="")
                 if parsed.port:
                     netloc = f"{username}:{password}@{parsed.hostname}:{parsed.port}"
                 else:
                     netloc = f"{username}:{password}@{parsed.hostname}"
-                normalized = urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+                normalized = urlunsplit(
+                    (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+                )
                 parsed = urlsplit(normalized)
 
         if not parsed.query:

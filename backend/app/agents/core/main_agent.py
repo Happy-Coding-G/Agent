@@ -1,8 +1,6 @@
-"""
-Main Agent Orchestrator - Multi-Agent System
+"""主 Agent 编排入口。
 
-This module implements the MainAgent that orchestrates all sub-agents
-using LangGraph subgraphs for each specialized agent.
+负责意图识别、子 Agent 路由和统一聊天封装。
 """
 import logging
 import uuid
@@ -17,22 +15,11 @@ from .prompts import INTENT_DETECTION_PROMPT
 logger = logging.getLogger(__name__)
 
 
+# 功能：统一管理各类子 Agent 的初始化和调用。
 class SubAgents:
-    """
-    Container for all sub-agents.
-    Manages the lifecycle of all sub-agent instances and provides
-    a unified interface for invoking them.
-    """
-
+    
+    # 功能：保存子 Agent 运行所需依赖。
     def __init__(self, db: AsyncSession, llm_client=None, space_path: Optional[str] = None):
-        """
-        Initialize SubAgents container.
-
-        Args:
-            db: AsyncSession for database operations
-            llm_client: LLM client for agents that need it
-            space_path: Root path for file query agent (space directory)
-        """
         self._db = db
         self._llm_client = llm_client
         self._space_path = space_path
@@ -40,13 +27,13 @@ class SubAgents:
         self._graphs: Dict[AgentType, Any] = {}
         self._initialized = False
 
+    # 功能：延迟加载并注册所有子 Agent。
     def _lazy_init(self):
-        """Lazy initialization of all sub-agents on first use."""
         if self._initialized:
             return
 
         try:
-            # Import subagent classes
+            # 延迟导入子 Agent 实现。
             from app.agents.subagents.file_query_agent import FileQueryAgent
             from app.agents.subagents.qa_agent import QAAgent
             from app.agents.subagents.data_process_agent import DataProcessAgent
@@ -54,7 +41,7 @@ class SubAgents:
             from app.agents.subagents.asset_organize_agent import AssetOrganizeAgent
             from app.agents.subagents.trade_agent import TradeAgent
 
-            # Initialize each agent with its required dependencies
+            # 按依赖初始化各子 Agent。
             if self._space_path:
                 self._agents[AgentType.FILE_QUERY] = FileQueryAgent(self._space_path)
                 self._graphs[AgentType.FILE_QUERY] = self._agents[AgentType.FILE_QUERY].graph
@@ -72,7 +59,7 @@ class SubAgents:
             self._graphs[AgentType.ASSET_ORGANIZE] = self._agents[AgentType.ASSET_ORGANIZE].graph
 
             self._agents[AgentType.TRADE] = TradeAgent(self._db)
-            # TradeAgent has multiple graphs (listing, purchase, yield)
+            # 交易 Agent 内部封装多种交易工作流。
             self._graphs[AgentType.TRADE] = self._agents[AgentType.TRADE]
 
             self._initialized = True
@@ -82,22 +69,13 @@ class SubAgents:
             logger.error(f"Failed to import subagent classes: {e}")
             raise
 
+    # 功能：按类型调用对应子 Agent，并统一结果结构。
     async def invoke_subagent(
         self,
         agent_type: AgentType,
         input_state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """
-        Invoke a sub-agent by type with proper state transformation.
-
-        Args:
-            agent_type: The type of agent to invoke
-            input_state: The input state from MainAgent
-
-        Returns:
-            The result from the sub-agent execution
-        """
-        # Ensure agents are initialized
+        # 确保子 Agent 已完成初始化。
         self._lazy_init()
 
         if agent_type not in self._graphs:
@@ -111,16 +89,16 @@ class SubAgents:
             graph = self._graphs.get(agent_type)
 
             if agent_type == AgentType.FILE_QUERY:
-                # FileQueryAgent has different interface
+                # 文件查询 Agent 直接执行 run。
                 query = input_state.get("user_request", "")
                 return await agent.run(query)
 
             elif agent_type == AgentType.QA:
-                # Use new unified QAAgent interface
+                # QA Agent 走统一问答接口。
                 from app.db.models import Users
                 qa_agent = self._agents.get(AgentType.QA)
 
-                # Get user for permission checking
+                # 读取当前用户用于权限校验。
                 user = None
                 user_id = input_state.get("user_id")
                 if user_id:
@@ -136,7 +114,7 @@ class SubAgents:
                         "agent_type": "qa"
                     }
 
-                # Call unified QAAgent.run() interface
+                # 调用统一 QA 入口。
                 return await qa_agent.run(
                     query=input_state.get("user_request", ""),
                     space_public_id=input_state.get("space_id", ""),
@@ -145,7 +123,7 @@ class SubAgents:
                 )
 
             elif agent_type == AgentType.DATA_PROCESS:
-                # DataProcessAgent
+                # 组装数据处理输入。
                 doc_input = {
                     "source_type": input_state.get("source_type", "minio"),
                     "source_path": input_state.get("source_path", ""),
@@ -169,7 +147,7 @@ class SubAgents:
                 }
 
             elif agent_type == AgentType.REVIEW:
-                # ReviewAgent
+                # 组装审核输入。
                 review_input = {
                     "doc_id": input_state.get("doc_id", ""),
                     "review_type": input_state.get("review_type", "quality"),
@@ -191,7 +169,7 @@ class SubAgents:
                 }
 
             elif agent_type == AgentType.ASSET_ORGANIZE:
-                # AssetOrganizeAgent
+                # 组装资产整理输入。
                 asset_input = {
                     "asset_ids": input_state.get("asset_ids", []),
                     "clustering_result": {},
@@ -208,7 +186,7 @@ class SubAgents:
                 }
 
             elif agent_type == AgentType.TRADE:
-                # TradeAgent has multiple workflows - determine which to use
+                # 按交易动作选择对应工作流。
                 action = input_state.get("action", "listing")
                 if action == "listing":
                     return await self._invoke_trade_listing(agent, input_state)
@@ -220,7 +198,7 @@ class SubAgents:
                     return {"error": f"Unknown trade action: {action}"}
 
             elif agent_type == AgentType.CHAT:
-                # Fallback for general chat - use QA agent
+                # 通用聊天默认回退到 QA。
                 return await self.invoke_subagent(AgentType.QA, input_state)
 
             else:
@@ -234,14 +212,14 @@ class SubAgents:
                 "agent_type": agent_type.value
             }
 
+    # 功能：执行交易上架流程。
     async def _invoke_trade_listing(
         self, agent: Any, input_state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Invoke TradeAgent listing workflow using hybrid market architecture."""
         from app.db.models import Users
         from sqlalchemy import select
 
-        # Get user for permission checking
+        # 读取当前用户。
         user = None
         user_id = input_state.get("user_id")
         if user_id:
@@ -251,7 +229,7 @@ class SubAgents:
         if not user:
             return {"success": False, "error": "User not found for trade listing"}
 
-        # Use new hybrid market architecture API
+        # 调用交易上架接口。
         pricing_strategy = input_state.get("pricing_strategy", "negotiable")
         reserve_price = input_state.get("reserve_price")
 
@@ -279,14 +257,14 @@ class SubAgents:
             logger.exception(f"Trade listing failed: {e}")
             return {"success": False, "error": str(e)}
 
+    # 功能：执行交易购买或议价流程。
     async def _invoke_trade_purchase(
         self, agent: Any, input_state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Invoke TradeAgent purchase workflow using hybrid market architecture."""
         from app.db.models import Users
         from sqlalchemy import select
 
-        # Get user for permission checking
+        # 读取当前用户。
         user = None
         user_id = input_state.get("user_id")
         if user_id:
@@ -297,18 +275,18 @@ class SubAgents:
             return {"success": False, "error": "User not found for trade purchase"}
 
         try:
-            # Determine purchase type
+            # 判断购买方式。
             purchase_type = input_state.get("purchase_type", "direct")
 
             if purchase_type == "auction_bid":
-                # Place auction bid
+                # 提交拍卖出价。
                 result = await agent.place_auction_bid(
                     lot_id=input_state.get("lot_id", ""),
                     user=user,
                     amount=input_state.get("bid_amount", 0),
                 )
             elif purchase_type == "bilateral":
-                # Create bilateral negotiation
+                # 创建双边议价会话。
                 result = await agent.create_bilateral_negotiation(
                     listing_id=input_state.get("listing_id", ""),
                     buyer=user,
@@ -316,7 +294,7 @@ class SubAgents:
                     max_rounds=input_state.get("max_rounds", 10),
                 )
             else:
-                # Direct purchase or initiate negotiation
+                # 直接购买或发起协商。
                 result = await agent.initiate_purchase(
                     user=user,
                     listing_id=input_state.get("listing_id"),
@@ -325,7 +303,7 @@ class SubAgents:
                     mechanism_hint=input_state.get("mechanism_hint"),
                 )
 
-                # If immediate settlement possible (fixed price)
+                # 固定价场景可直接成交。
                 if result.get("status") == "awarding":
                     settlement = result.get("settlement", {})
                     return {
@@ -350,14 +328,14 @@ class SubAgents:
             logger.exception(f"Trade purchase failed: {e}")
             return {"success": False, "error": str(e)}
 
+    # 功能：执行收益计算流程。
     async def _invoke_trade_yield(
         self, agent: Any, input_state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Invoke TradeAgent yield workflow (legacy - maintained for compatibility)."""
         from app.db.models import Users
         from sqlalchemy import select
 
-        # Get user
+        # 读取当前用户。
         user = None
         user_id = input_state.get("user_id")
         if user_id:
@@ -368,7 +346,7 @@ class SubAgents:
             return {"success": False, "error": "User not found for yield calculation"}
 
         try:
-            # Use legacy API for yield calculation
+            # 调用兼容旧接口的收益计算。
             result = await agent.run_auto_yield(
                 space_public_id=input_state.get("space_id", ""),
                 user=user,
@@ -389,36 +367,26 @@ class SubAgents:
             logger.exception(f"Trade yield failed: {e}")
             return {"success": False, "error": str(e)}
 
+    # 功能：返回当前已注册的 Agent 类型。
     def get_registered_agents(self) -> list[str]:
-        """Return list of registered agent types."""
         self._lazy_init()
         return [agent_type.value for agent_type in self._graphs.keys()]
 
 
+# 功能：负责主聊天流程中的意图识别、路由和结果封装。
 class MainAgent:
-    """
-    Main Agent Orchestrator that routes user requests to appropriate sub-agents.
-    Uses LangGraph for state management and agent coordination.
-    """
-
+    
+    # 功能：初始化主 Agent 运行依赖和状态图。
     def __init__(self, db: AsyncSession, llm_client=None, space_path: Optional[str] = None):
-        """
-        Initialize MainAgent.
-
-        Args:
-            db: AsyncSession for database operations
-            llm_client: Optional LLM client for intent detection
-            space_path: Root path for file queries
-        """
         self._db = db
         self._llm_client = llm_client
         self._space_path = space_path
         self._subagents: Optional[SubAgents] = None
         self.graph = self._build_graph()
 
+    # 功能：按需初始化并返回子 Agent 容器。
     @property
     def subagents(self) -> SubAgents:
-        """Lazy-load subagents."""
         if self._subagents is None:
             self._subagents = SubAgents(
                 db=self._db,
@@ -427,13 +395,13 @@ class MainAgent:
             )
         return self._subagents
 
+    # 功能：允许外部注入子 Agent 容器。
     @subagents.setter
     def subagents(self, value):
-        """Allow setting subagents externally."""
         self._subagents = value
 
+    # 功能：构建主 Agent 的 LangGraph 状态图。
     def _build_graph(self) -> StateGraph:
-        """Build the main agent state graph."""
         workflow = StateGraph(MainAgentState)
 
         workflow.add_node("intent_detection", self._detect_intent)
@@ -460,8 +428,8 @@ class MainAgent:
         checkpointer = MemorySaver()
         return workflow.compile(checkpointer=checkpointer)
 
+    # 功能：根据状态决定是否进入错误处理分支。
     def _should_handle_error(self, state: MainAgentState) -> str:
-        """Determine if we should route to error handler based on state."""
         if state.get("error"):
             return "error"
         task_status = state.get("task_status")
@@ -469,8 +437,8 @@ class MainAgent:
             return "error"
         return "success"
 
+    # 功能：识别用户输入对应的意图类型。
     async def _detect_intent(self, state: MainAgentState) -> MainAgentState:
-        """Detect user intent from the request."""
         user_request = state.get("user_request", "")
 
         if not self._llm_client:
@@ -499,8 +467,8 @@ class MainAgent:
 
         return state
 
+    # 功能：在 LLM 不可用时用关键词做兜底分类。
     def _simple_intent_detection(self, text: str) -> AgentType:
-        """Simple keyword-based intent detection as fallback."""
         text_lower = text.lower()
 
         if any(kw in text_lower for kw in ["查看", "文件", "查找", "搜索", "目录"]):
@@ -518,15 +486,15 @@ class MainAgent:
         else:
             return AgentType.CHAT
 
+    # 功能：把请求路由到目标子 Agent。
     async def _route_to_subagent(self, state: MainAgentState) -> MainAgentState:
-        """Route to the appropriate sub-agent based on detected intent."""
         intent = state.get("intent", AgentType.CHAT)
         state["active_subagent"] = intent
         state["task_status"] = TaskStatus.RUNNING
         return state
 
+    # 功能：执行当前选中的子 Agent。
     async def _execute_subagent(self, state: MainAgentState) -> MainAgentState:
-        """Execute the active sub-agent."""
         agent_type = state.get("active_subagent", AgentType.CHAT)
 
         try:
@@ -540,14 +508,14 @@ class MainAgent:
 
         return state
 
+    # 功能：聚合子 Agent 执行结果。
     async def _aggregate_results(self, state: MainAgentState) -> MainAgentState:
-        """Aggregate results from sub-agents."""
         subagent_result = state.get("subagent_result", {})
         state["task_result"] = subagent_result
         return state
 
+    # 功能：处理失败后的重试状态。
     async def _handle_error(self, state: MainAgentState) -> MainAgentState:
-        """Handle errors and implement retry logic."""
         retry_count = state.get("retry_count", 0)
 
         if retry_count < 3:
@@ -558,10 +526,11 @@ class MainAgent:
 
         return state
 
+    # 功能：保留统一的响应格式出口。
     async def _format_response(self, state: MainAgentState) -> MainAgentState:
-        """Format the final response."""
         return state
 
+    # 功能：按统一事件协议流式执行主聊天流程。
     async def stream_chat(
         self,
         message: str,
@@ -570,17 +539,6 @@ class MainAgent:
         context: Optional[Dict] = None,
         top_k: int = 5,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Main chat interface with unified streaming protocol.
-
-        Stream events:
-            - {"type": "intent", "data": "qa"} - Intent detected
-            - {"type": "agent_type", "data": "qa"} - Agent type selected
-            - {"type": "status", "data": "running"} - Status updates
-            - {"type": "token", "data": "..."} - Streaming tokens (QA only)
-            - {"type": "result", "data": {...}} - Final result
-            - {"type": "error", "data": "..."} - Error message
-        """
         initial_state: MainAgentState = {
             "user_request": message,
             "space_id": space_id,
@@ -597,7 +555,7 @@ class MainAgent:
             "retry_count": 0,
         }
 
-        # Step 1: Intent Detection
+        # 第一步：识别意图。
         yield {"type": "status", "data": "detecting_intent"}
         initial_state = await self._detect_intent(initial_state)
 
@@ -606,22 +564,22 @@ class MainAgent:
         yield {"type": "intent", "data": intent_str}
         yield {"type": "agent_type", "data": intent_str}
 
-        # Step 2: Route to subagent
+        # 第二步：路由子 Agent。
         yield {"type": "status", "data": "routing"}
         initial_state = await self._route_to_subagent(initial_state)
 
-        # Step 3: Execute subagent with streaming support for QA
+        # 第三步：执行子 Agent。
         yield {"type": "status", "data": "running"}
 
         agent_type = initial_state.get("active_subagent", AgentType.CHAT)
 
         try:
-            # Special handling for QA agent - support streaming
+            # QA 支持流式输出。
             if agent_type == AgentType.QA:
                 async for event in self._stream_qa_agent(initial_state, top_k):
                     yield event
             else:
-                # Non-streaming agents
+                # 其他 Agent 走普通执行。
                 initial_state = await self._execute_subagent(initial_state)
 
                 if initial_state.get("error"):
@@ -636,16 +594,16 @@ class MainAgent:
 
         yield {"type": "status", "data": "completed"}
 
+    # 功能：流式执行 QA Agent 并转发事件。
     async def _stream_qa_agent(
         self,
         state: MainAgentState,
         top_k: int = 5,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Stream QA agent execution with token-level events."""
         from app.db.models import Users
         from sqlalchemy import select
 
-        # Get user
+        # 读取当前用户。
         user = None
         user_id = state.get("user_id")
         if user_id:
@@ -656,15 +614,15 @@ class MainAgent:
             yield {"type": "error", "data": "User not found"}
             return
 
-        # Get QA agent
+        # 获取 QA Agent 实例。
         qa_agent = self.subagents._agents.get(AgentType.QA)
         if not qa_agent:
-            # Fallback to non-streaming
+            # 回退到普通执行。
             state = await self._execute_subagent(state)
             yield {"type": "result", "data": state.get("subagent_result", {})}
             return
 
-        # Stream from QA agent
+        # 转发 QA 事件流。
         space_id = state.get("space_id", "")
         message = state.get("user_request", "")
 
@@ -675,7 +633,7 @@ class MainAgent:
                 user=user,
                 top_k=top_k,
             ):
-                # Forward events with transformation
+                # 转换并透传事件。
                 if event["type"] == "token":
                     yield {"type": "token", "data": event["content"]}
                 elif event["type"] == "status":
@@ -684,7 +642,7 @@ class MainAgent:
                     yield {"type": "status", "data": "sources_found"}
                 elif event["type"] == "result":
                     result = event["content"]
-                    # Update state
+                    # 回写执行状态。
                     state["subagent_result"] = result
                     state["task_result"] = result
                     state["task_status"] = TaskStatus.COMPLETED
@@ -700,6 +658,7 @@ class MainAgent:
             state["task_status"] = TaskStatus.FAILED
             yield {"type": "error", "data": str(e)}
 
+    # 功能：执行非流式聊天并组装统一响应。
     async def chat(
         self,
         message: str,
@@ -708,21 +667,7 @@ class MainAgent:
         context: Optional[Dict] = None,
         top_k: int = 5,
     ) -> Dict[str, Any]:
-        """
-        Non-streaming chat interface with unified response format.
-
-        Returns:
-            {
-                "success": bool,
-                "intent": str,
-                "agent_type": str,
-                "result": Dict,
-                "answer": str,
-                "sources": List[Dict],
-                "error": Optional[str]
-            }
-        """
-        # Collect all events
+        # 汇总流式阶段产出的事件。
         intent = None
         agent_type = None
         result = None
@@ -738,7 +683,7 @@ class MainAgent:
             elif chunk["type"] == "error":
                 error = chunk["data"]
 
-        # Build unified response
+        # 组装统一响应结构。
         response = {
             "success": error is None and result is not None,
             "intent": intent,
@@ -747,7 +692,7 @@ class MainAgent:
             "error": error,
         }
 
-        # Add QA-specific fields if applicable
+        # 补充 QA 专属字段。
         if result and isinstance(result, dict):
             if "answer" in result:
                 response["answer"] = result["answer"]

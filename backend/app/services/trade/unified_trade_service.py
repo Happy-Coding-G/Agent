@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .trade_service import TradeService
 from app.agents.subagents.trade_agent import TradeAgent
 from app.db.models import Users
-from app.core.errors import ServiceError
 
 
 class UnifiedTradeService:

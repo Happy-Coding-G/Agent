@@ -1,7 +1,8 @@
 """
-Agent API Endpoints - Multi-Agent System
-
-Provides unified API for the multi-agent orchestration system.
+本文件负责暴露与主 Agent 及其子 Agent 相关的 API，覆盖：
+1. 统一聊天与流式聊天。
+2. Agent 任务创建、状态查询与结果持久化。
+3. 文件查询、资产整理与文档审核等子 Agent 能力。
 """
 
 import json
@@ -36,12 +37,10 @@ from app.db.models import Spaces
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
-def create_main_agent(db: AsyncSession) -> MainAgent:
-    """创建主 Agent 实例。
 
-    当前仅保留 MainAgent 这一套路由分配方案。
-    Agent 绑定请求级 AsyncSession，不做全局缓存，避免持有已关闭的数据库会话。
-    """
+# 功能：创建请求级 MainAgent，统一复用当前数据库会话与 LLM 客户端。
+def create_main_agent(db: AsyncSession) -> MainAgent:
+
     space_path = getattr(settings, "UPLOAD_DIR", "/tmp/uploads")
     return MainAgent(
         db=db,
@@ -50,8 +49,9 @@ def create_main_agent(db: AsyncSession) -> MainAgent:
     )
 
 
+
+# 功能：将 space_id 从 public_id 或字符串数字解析成数据库内部主键。
 async def resolve_space_id(db: AsyncSession, space_id: Optional[str]) -> int:
-    """将空间标识解析为数据库内部 ID。"""
     if not space_id:
         raise HTTPException(status_code=400, detail="space_id is required")
     if space_id.isdigit():
@@ -64,6 +64,8 @@ async def resolve_space_id(db: AsyncSession, space_id: Optional[str]) -> int:
     return db_id
 
 
+
+# 功能：写入一条 Agent 任务初始记录，便于后续跟踪执行状态。
 async def _create_agent_task_record(
     db: AsyncSession,
     agent_type: str,
@@ -72,7 +74,7 @@ async def _create_agent_task_record(
     user_id: int,
     public_id: str = None,
 ) -> AgentTasks:
-    """创建一条 Agent 任务记录。"""
+
     task = AgentTasks(
         public_id=public_id or str(uuid.uuid4())[:32],
         agent_type=agent_type,
@@ -87,6 +89,8 @@ async def _create_agent_task_record(
     return task
 
 
+
+# 功能：更新 Agent 任务状态、结果、错误信息和执行时间。
 async def _update_agent_task(
     db: AsyncSession,
     task_public_id: str,
@@ -97,7 +101,6 @@ async def _update_agent_task(
     started_at: datetime = None,
     finished_at: datetime = None,
 ) -> AgentTasks:
-    """更新 Agent 任务的执行状态和结果。"""
     stmt = select(AgentTasks).where(AgentTasks.public_id == task_public_id)
     result = await db.execute(stmt)
     task = result.scalar_one_or_none()
@@ -122,20 +125,22 @@ async def _update_agent_task(
     return task
 
 
+
+# 功能：根据任务公开 ID 读取任务记录。
 async def _get_agent_task(db: AsyncSession, task_public_id: str) -> AgentTasks:
-    """按公开 ID 查询 Agent 任务。"""
     stmt = select(AgentTasks).where(AgentTasks.public_id == task_public_id)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 
+
+# 功能：处理一次非流式 Agent 对话请求，并持久化任务结果。
 @router.post("/chat", response_model=AgentChatResponse)
 async def agent_chat(
     req: AgentChatRequest,
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """统一聊天入口，自动路由到对应子 Agent。"""
     agent = create_main_agent(db)
 
     # Resolve space_id from public_id or integer
@@ -194,13 +199,14 @@ async def agent_chat(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+# 功能：以 SSE 方式流式返回 Agent 对话结果，并在流结束后更新任务状态。
 @router.post("/chat/stream")
 async def agent_chat_stream(
     req: AgentChatRequest,
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """SSE 流式聊天 - 优化连接池使用"""
     from app.db.session import AsyncSessionLocal
 
     # 1. 解析 space_id
@@ -227,8 +233,8 @@ async def agent_chat_stream(
     task_public_id = task.public_id
     final_result = {}
 
+    # 功能：按事件流逐步产出聊天结果，并使用独立会话更新任务记录。
     async def event_stream():
-        """生成流式事件 - 使用独立的数据库会话"""
         nonlocal final_result
 
         # 流内部创建新的短生命周期会话
@@ -289,13 +295,13 @@ async def agent_chat_stream(
     )
 
 
+# 功能：创建一个可异步执行和追踪的 Agent 任务记录。
 @router.post("/task", response_model=AgentTaskResponse)
 async def create_agent_task(
     req: AgentTaskCreate,
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """创建一个可追踪的 Agent 异步任务。"""
     # Resolve space_id from public_id or integer
     space_id = await resolve_space_id(db, req.space_id)
 
@@ -315,13 +321,14 @@ async def create_agent_task(
     )
 
 
+
+# 功能：查询指定 Agent 任务的当前状态与基础进度信息。
 @router.get("/task/{task_id}/status")
 async def get_task_status(
     task_id: str,
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """查询 Agent 任务当前状态。"""
     task = await _get_agent_task(db, task_id)
 
     if not task:
@@ -349,13 +356,14 @@ async def get_task_status(
     }
 
 
+
+# 功能：调用文件查询能力，用自然语言检索空间内文件内容。
 @router.post("/file/query", response_model=FileQueryResult)
 async def file_query(
     req: FileQueryRequest,
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """使用自然语言检索本地文件内容。"""
     agent = create_main_agent(db)
 
     try:
@@ -375,13 +383,14 @@ async def file_query(
         return FileQueryResult(files=[], error=str(e))
 
 
+
+# 功能：触发资产整理子 Agent，并将聚类结果保存到数据库。
 @router.post("/asset/organize")
 async def organize_assets(
     req: AssetOrganizeRequest,
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """调用资产整理 Agent 并保存聚类结果。"""
     # Resolve space_id from public_id or integer
     space_id_int = await resolve_space_id(db, req.space_id)
 
@@ -486,13 +495,14 @@ async def organize_assets(
         }
 
 
+
+# 功能：读取指定空间下已保存的资产聚类结果。
 @router.get("/clusters", response_model=list[AssetClusterResponse])
 async def get_asset_clusters(
     space_id: str,
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取指定空间下的资产聚类结果。"""
     # Resolve space_id from public_id or integer
     space_id_int = await resolve_space_id(db, space_id)
 
@@ -524,6 +534,8 @@ async def get_asset_clusters(
     return response
 
 
+
+# 功能：触发文档审核子 Agent，并落库审核日志与任务结果。
 @router.post("/review/{doc_id}", response_model=ReviewResponse)
 async def trigger_review(
     doc_id: str,
@@ -531,7 +543,6 @@ async def trigger_review(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """触发文档审核并写入审核日志。"""
     # Parse space_id
     try:
         space_id_int = int(req.space_id) if req.space_id else 0

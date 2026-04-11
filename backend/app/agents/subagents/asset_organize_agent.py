@@ -4,7 +4,7 @@ AssetOrganizeAgent - LangGraph-based asset organization agent with graph cluster
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -12,12 +12,10 @@ from langchain_core.runnables import RunnableLambda
 from langgraph.graph import END, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.core import ASSET_CLUSTER_PROMPT, AssetOrganizeState
+from app.agents.core import AssetOrganizeState
 from app.core.config import settings
-from app.db.models import AssetClusters, AssetClusterMembership
 from app.services.asset_service import AssetService
 from app.services.base import get_llm_client
-from sqlalchemy import select, and_
 
 logger = logging.getLogger(__name__)
 

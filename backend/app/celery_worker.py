@@ -1,18 +1,20 @@
 #!/usr/bin/env python
+"""Celery 启动模块统一入口。
+
+支持：
+    python -m app.celery_worker worker -Q celery,ingest,high_priority -l info
+    celery -A app.celery_worker.celery_app worker -Q celery,ingest,high_priority -l info
 """
-Celery Worker 启动入口
-用法：
-    python -m app.celery_worker worker -Q ingest,default -l info
-"""
 
-import os
-import sys
+from __future__ import annotations
 
-# 添加 backend 到路径
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from app.core.celery_config import celery_app
 
-# 启动 Celery
-if __name__ == "__main__":
-    from app.core.celery_config import celery_app
 
+def main() -> int:
     celery_app.start()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

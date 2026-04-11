@@ -22,7 +22,7 @@ from app.agents.core import QAState, QA_SYSTEM_PROMPT
 from app.ai.embedding_client import embed_query_with_fallback
 from app.core.config import settings
 from app.core.errors import ServiceError
-from app.db.models import DocChunkEmbeddings, DocChunks, Documents, Spaces, Users
+from app.db.models import DocChunkEmbeddings, DocChunks, Documents, Users
 from app.repositories.space_repo import SpaceRepository
 from app.services.base import SpaceAwareService, get_llm_client
 
