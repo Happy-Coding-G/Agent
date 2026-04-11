@@ -14,6 +14,7 @@ from app.api.v1.endpoints.tasks import router as tasks_router
 from app.api.v1.endpoints.agent import router as agent_router
 from app.api.v1.endpoints.memory import router as memory_router
 from app.api.v1.endpoints.lineage import router as lineage_router
+from app.api.v1.endpoints.user_agent import router as user_agent_router
 
 api_v1_router = APIRouter()
 api_v1_router.include_router(health_router, tags=["health"])
@@ -29,3 +30,4 @@ api_v1_router.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
 api_v1_router.include_router(agent_router, tags=["agent"])
 api_v1_router.include_router(memory_router, prefix="/memory", tags=["memory"])
 api_v1_router.include_router(lineage_router, prefix="/lineage", tags=["lineage"])
+api_v1_router.include_router(user_agent_router, tags=["user-agent"])
