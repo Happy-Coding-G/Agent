@@ -6,6 +6,7 @@ from typing import Optional, List
 
 from sqlalchemy import (
     BigInteger,
+    Column,
     Integer,
     LargeBinary,
     String,
@@ -251,6 +252,11 @@ class Users(Base):
     )
     access_logs: Mapped[List["DataAccessAuditLogs"]] = relationship(
         "DataAccessAuditLogs", back_populates="buyer"
+    )
+
+    # Agent 配置关系
+    agent_configs: Mapped[List["UserAgentConfig"]] = relationship(
+        "UserAgentConfig", back_populates="user"
     )
 
 
@@ -1293,74 +1299,6 @@ class NegotiationHistorySummary(Base):
 
     # Relationships
     negotiation: Mapped["NegotiationSessions"] = relationship("NegotiationSessions")
-
-
-class UserAgentConfig(Base):
-    """
-    User's Agent configuration and strategy settings.
-
-    Each user can configure their Seller/Buyer Agent behavior.
-    """
-
-    __tablename__ = "user_agent_configs"
-    __table_args__ = (
-        UniqueConstraint("user_id", "agent_role", name="uk_user_agent_role"),
-        Index("idx_user_agent_config", "user_id"),
-    )
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
-
-    # Agent role: seller or buyer
-    agent_role: Mapped[str] = mapped_column(String(16), nullable=False)  # seller, buyer
-
-    # Strategy configuration
-    pricing_strategy: Mapped[str] = mapped_column(
-        String(32), server_default=text("'negotiable'")
-    )  # fixed, negotiable, aggressive
-    negotiation_style: Mapped[str] = mapped_column(
-        String(32), server_default=text("'balanced'")
-    )  # conservative, balanced, aggressive
-
-    # Auto-negotiation settings
-    auto_accept_threshold: Mapped[Optional[float]] = mapped_column(
-        Float
-    )  # Auto-accept if offer >= this % of target
-    auto_counter_threshold: Mapped[Optional[float]] = mapped_column(
-        Float
-    )  # Auto-counter if offer >= this % of reserve
-    max_auto_rounds: Mapped[int] = mapped_column(Integer, server_default=text("5"))
-
-    # Notification settings
-    notify_on_new_bid: Mapped[bool] = mapped_column(
-        Boolean, server_default=text("true")
-    )
-    notify_on_offer: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
-    notify_on_agreement: Mapped[bool] = mapped_column(
-        Boolean, server_default=text("true")
-    )
-    webhook_url: Mapped[Optional[str]] = mapped_column(Text)
-
-    # LLM settings for agent decision making
-    use_llm_decision: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
-    llm_temperature: Mapped[float] = mapped_column(Float, server_default=text("0.3"))
-
-    # Custom instructions
-    custom_instructions: Mapped[Optional[str]] = mapped_column(Text)
-
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=text("now()")
-    )
-    updated_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=text("now()"),
-        onupdate=datetime.datetime.utcnow,
-    )
-
-    # Relationships
-    user: Mapped["Users"] = relationship("Users", back_populates="agent_configs")
 
 
 # =============================================================================
@@ -2481,3 +2419,61 @@ class DataLineageNodes(Base):
         Index("ix_lineage_type", "node_type"),
     )
 
+
+
+
+# ============================================================================
+# User-Level Agent Configuration
+# ============================================================================
+
+class LLMProvider(str, PyEnum):
+    """LLM 提供商枚举"""
+    DEEPSEEK = "deepseek"
+    OPENAI = "openai"
+    QWEN = "qwen"
+    CUSTOM = "custom"
+
+
+class UserAgentConfig(Base):
+    """
+    用户级 Agent 配置表
+
+    每个用户可以配置自己的 LLM API，实现个性化的 Agent 行为
+    """
+    __tablename__ = "user_agent_configs"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uk_user_agent_config"),
+        Index("idx_agent_config_user", "user_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    # LLM 配置
+    provider = Column(Enum(LLMProvider), default=LLMProvider.DEEPSEEK, nullable=False)
+    model = Column(String(100), default="deepseek-chat")
+    api_key_encrypted = Column(Text, nullable=True)  # 加密的 API Key
+    base_url = Column(String(500), nullable=True)  # 自定义 base URL
+
+    # Agent 行为配置
+    temperature = Column(Float, default=0.2)
+    max_tokens = Column(Integer, default=2048)
+    system_prompt = Column(Text, nullable=True)  # 自定义系统提示词
+
+    # 交易场景专用配置
+    trade_auto_negotiate = Column(Boolean, default=False)  # 是否自动协商
+    trade_max_rounds = Column(Integer, default=10)
+    trade_min_profit_margin = Column(Float, default=0.1)  # 最小利润率（卖方）
+    trade_max_budget_ratio = Column(Float, default=0.9)  # 最大预算比例（买方）
+
+    # 状态
+    is_active = Column(Boolean, default=True)
+    is_default = Column(Boolean, default=False)  # 是否为默认配置（用于回退）
+
+    # 时间戳
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc),
+                        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    # 关系
+    user = relationship("Users", back_populates="agent_configs")
