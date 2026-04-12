@@ -5,10 +5,28 @@ from datetime import datetime
 
 # --- 用户相关 ---
 class AuthRequest(BaseModel):
-    identifier: str
-    credential: str
-    identity_type: str = "password"
-    display_name: Optional[str] = None
+    identifier: str = Field(
+        ...,
+        min_length=3,
+        max_length=255,
+        description="Login identifier (username, email, phone)",
+    )
+    credential: str = Field(
+        ...,
+        min_length=6,
+        max_length=128,
+        description="Password or auth credential",
+    )
+    identity_type: str = Field(
+        default="password",
+        pattern=r"^(password|phone|wechat|github)$",
+        description="Authentication method",
+    )
+    display_name: Optional[str] = Field(
+        default=None,
+        max_length=100,
+        description="User display name",
+    )
 
 
 class AuthResponse(BaseModel):
