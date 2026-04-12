@@ -1,4 +1,4 @@
-export type Activity = "explorer" | "search" | "assets" | "kg" | "agent";
+export type Activity = "explorer" | "search" | "assets" | "kg" | "agent" | "usage";
 
 export type TabKind = "chat" | "markdown" | "filePreview" | "kg" | "asset";
 
