@@ -11,6 +11,7 @@ const items: Item[] = [
   { key: "assets", label: "Assets", icon: "AS", description: "Manage generated assets" },
   { key: "kg", label: "Graph", icon: "KG", description: "Knowledge graph" },
   { key: "agent", label: "Agent", icon: "AG", description: "Configure your AI agent" },
+  { key: "usage", label: "Usage", icon: "TK", description: "Token usage statistics" },
 ];
 
 export default function ActivityBar() {

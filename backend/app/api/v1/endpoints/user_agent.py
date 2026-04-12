@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps.auth import get_current_user, get_db
 from app.db.models import Users
 from app.services.user_agent_service import UserAgentService
+from app.services.safety import PromptSafetyService
 from app.core.errors import ServiceError
 
 router = APIRouter(prefix="/user/agent", tags=["user-agent"])
@@ -149,6 +150,15 @@ async def update_llm_config(
             is_active=config.is_active,
         )
 
+    except ServiceError as e:
+        # 处理业务逻辑错误（如安全审核失败）
+        raise HTTPException(
+            status_code=e.status_code,
+            detail={
+                "message": str(e),
+                "details": e.details if hasattr(e, 'details') else None,
+            }
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -194,6 +204,15 @@ async def update_trade_config(
             is_active=config.is_active,
         )
 
+    except ServiceError as e:
+        # 处理业务逻辑错误（如安全审核失败）
+        raise HTTPException(
+            status_code=e.status_code,
+            detail={
+                "message": str(e),
+                "details": e.details if hasattr(e, 'details') else None,
+            }
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -266,5 +285,56 @@ async def reset_agent_config(
 
         return {"success": True, "message": "已重置为系统默认配置"}
 
+    except ServiceError as e:
+        # 处理业务逻辑错误（如安全审核失败）
+        raise HTTPException(
+            status_code=e.status_code,
+            detail={
+                "message": str(e),
+                "details": e.details if hasattr(e, 'details') else None,
+            }
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/safety/guidelines")
+async def get_safety_guidelines(
+    current_user: Users = Depends(get_current_user),
+):
+    """
+    获取 System Prompt 安全指南
+
+    返回安全编写 System Prompt 的最佳实践和禁止事项
+    """
+    service = PromptSafetyService()
+    return {
+        "success": True,
+        "data": service.get_safety_guidelines()
+    }
+
+
+@router.post("/safety/validate-prompt")
+async def validate_prompt_safety(
+    prompt: str,
+    current_user: Users = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    验证 System Prompt 安全性（预检接口）
+
+    在实际保存前，先验证 Prompt 是否安全
+    """
+    service = PromptSafetyService(db)
+    result = await service.validate_system_prompt(prompt, user_id=current_user.id)
+
+    return {
+        "success": True,
+        "data": {
+            "passed": result.passed,
+            "risk_level": result.risk_level.value,
+            "reason": result.reason,
+            "matched_patterns": result.matched_patterns,
+            "suggestions": result.suggestions,
+        }
+    }

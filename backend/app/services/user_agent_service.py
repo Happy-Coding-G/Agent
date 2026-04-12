@@ -198,7 +198,8 @@ class UserAgentService:
     async def update_config(
         self,
         user_id: int,
-        config_data: Dict[str, Any]
+        config_data: Dict[str, Any],
+        skip_safety_check: bool = False
     ) -> UserAgentConfig:
         """
         更新用户 Agent 配置
@@ -206,11 +207,44 @@ class UserAgentService:
         Args:
             user_id: 用户ID
             config_data: 配置数据字典
+            skip_safety_check: 是否跳过安全审核（仅用于管理场景）
 
         Returns:
             更新后的 UserAgentConfig
+
+        Raises:
+            ServiceError: 如果安全审核未通过
         """
+        from app.services.safety import PromptSafetyService
+
         config = await self.get_or_create_config(user_id)
+
+        # 安全审核：检查 system_prompt
+        if "system_prompt" in config_data and not skip_safety_check:
+            system_prompt = config_data["system_prompt"]
+            safety_service = PromptSafetyService(self.db)
+            safety_result = await safety_service.validate_system_prompt(
+                system_prompt,
+                user_id=user_id
+            )
+
+            if not safety_result.passed:
+                raise ServiceError(
+                    400,
+                    f"System prompt failed safety check: {safety_result.reason}",
+                    details={
+                        "risk_level": safety_result.risk_level.value,
+                        "matched_patterns": safety_result.matched_patterns,
+                        "suggestions": safety_result.suggestions,
+                    }
+                )
+
+            # 记录安全审核日志
+            if safety_result.risk_level.value not in ["safe", "low"]:
+                logger.warning(
+                    f"System prompt passed with risk level {safety_result.risk_level.value}: "
+                    f"user={user_id}, patterns={safety_result.matched_patterns}"
+                )
 
         # 更新允许的字段
         allowed_fields = [

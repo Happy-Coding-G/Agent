@@ -1615,6 +1615,19 @@ Users.received_messages = relationship(
     back_populates="to_user",
 )
 Users.agent_configs = relationship("UserAgentConfig", back_populates="user")
+Users.token_usages = relationship("TokenUsage", back_populates="user", order_by="TokenUsage.created_at.desc()")
+
+# Escrow relationships
+Users.escrow_records_as_buyer = relationship(
+    "EscrowRecord",
+    foreign_keys="[EscrowRecord.buyer_id]",
+    back_populates="buyer",
+)
+Users.escrow_records_as_seller = relationship(
+    "EscrowRecord",
+    foreign_keys="[EscrowRecord.seller_id]",
+    back_populates="seller",
+)
 
 # Memory management relationships
 ConversationSessions.user = relationship(
@@ -2477,3 +2490,293 @@ class UserAgentConfig(Base):
 
     # 关系
     user = relationship("Users", back_populates="agent_configs")
+
+
+class FeatureType(PyEnum):
+    """功能类型枚举 - 用于标识Token使用的功能边界"""
+
+    CHAT = "chat"                          # RAG对话
+    CHAT_STREAM = "chat_stream"            # 流式对话
+    ASSET_GENERATION = "asset_generation"  # 资产生成
+    ASSET_ORGANIZE = "asset_organize"      # 资产整理
+    TRADE_NEGOTIATION = "trade_negotiation" # 交易协商
+    TRADE_PRICING = "trade_pricing"        # 交易定价
+    INGEST_PIPELINE = "ingest_pipeline"    # 文档摄入
+    GRAPH_CONSTRUCTION = "graph_construction"  # 知识图谱构建
+    REVIEW = "review"                      # 文档审核
+    FILE_QUERY = "file_query"              # 文件查询
+    EMBEDDING = "embedding"                # 文本嵌入
+    OTHER = "other"                        # 其他
+
+
+class TokenUsage(Base):
+    """
+    Token用量统计表
+
+    记录每个用户、每个功能、每个模型的Token消耗情况
+    支持实时查询用量统计和成本分析
+    """
+    __tablename__ = "token_usages"
+    __table_args__ = (
+        Index("idx_token_usage_user", "user_id"),
+        Index("idx_token_usage_feature", "feature_type"),
+        Index("idx_token_usage_model", "model"),
+        Index("idx_token_usage_created", "created_at"),
+        Index("idx_token_usage_user_created", "user_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    # 模型信息
+    provider = Column(Enum(LLMProvider), nullable=False)  # 复用LLMProvider枚举
+    model = Column(String(100), nullable=False)  # 具体模型名称
+    is_custom_api = Column(Boolean, default=False)  # 是否使用用户自己的API
+
+    # 功能边界标识
+    feature_type = Column(Enum(FeatureType), nullable=False)
+    feature_detail = Column(String(200), nullable=True)  # 详细功能描述
+
+    # Token用量 (来自LLM API响应)
+    prompt_tokens = Column(Integer, default=0)      # 输入token数
+    completion_tokens = Column(Integer, default=0)  # 输出token数
+    total_tokens = Column(Integer, default=0)       # 总token数
+
+    # 成本计算 (单位: 美元)
+    prompt_cost = Column(Float, default=0.0)        # 输入成本
+    completion_cost = Column(Float, default=0.0)    # 输出成本
+    total_cost = Column(Float, default=0.0)         # 总成本
+
+    # 请求元数据
+    request_id = Column(String(100), nullable=True, index=True)  # 关联的请求ID
+    session_id = Column(String(100), nullable=True, index=True)  # 会话ID
+    latency_ms = Column(Integer, nullable=True)     # 请求延迟(毫秒)
+    status = Column(String(20), default="success")  # success/error
+    error_message = Column(Text, nullable=True)     # 错误信息
+
+    # 扩展信息 (JSON格式，存储额外上下文)
+    metadata = Column(JSONB, default=dict)
+
+    # 时间戳
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    # 关系
+    user = relationship("Users", back_populates="token_usages")
+
+    def to_dict(self) -> dict:
+        """转换为字典格式"""
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "provider": self.provider.value if self.provider else None,
+            "model": self.model,
+            "is_custom_api": self.is_custom_api,
+            "feature_type": self.feature_type.value if self.feature_type else None,
+            "feature_detail": self.feature_detail,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "prompt_cost": round(self.prompt_cost, 6),
+            "completion_cost": round(self.completion_cost, 6),
+            "total_cost": round(self.total_cost, 6),
+            "request_id": self.request_id,
+            "session_id": self.session_id,
+            "latency_ms": self.latency_ms,
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class ModelPrice(Base):
+    """
+    模型定价表
+
+    存储各模型的Token单价，用于成本计算
+    """
+    __tablename__ = "model_prices"
+    __table_args__ = (
+        UniqueConstraint("provider", "model", name="uk_model_price"),
+        Index("idx_model_price_provider", "provider"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # 模型信息
+    provider = Column(Enum(LLMProvider), nullable=False)
+    model = Column(String(100), nullable=False)
+
+    # 定价 (每1K tokens的美元价格)
+    prompt_price_per_1k = Column(Float, nullable=False)    # 输入价格
+    completion_price_per_1k = Column(Float, nullable=False)  # 输出价格
+
+    # 货币和有效期
+    currency = Column(String(10), default="USD")
+    effective_from = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    effective_to = Column(DateTime, nullable=True)  # null表示当前有效
+
+    # 状态
+    is_active = Column(Boolean, default=True)
+
+    # 元数据
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc),
+                        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    def calculate_cost(self, prompt_tokens: int, completion_tokens: int) -> tuple[float, float, float]:
+        """
+        计算Token成本
+
+        Returns:
+            (prompt_cost, completion_cost, total_cost)
+        """
+        prompt_cost = (prompt_tokens / 1000) * self.prompt_price_per_1k
+        completion_cost = (completion_tokens / 1000) * self.completion_price_per_1k
+        return prompt_cost, completion_cost, prompt_cost + completion_cost
+
+
+# ============================================================================
+# Escrow Service Models - 资金托管服务
+# ============================================================================
+
+class EscrowStatus(str, PyEnum):
+    """托管资金状态枚举"""
+
+    LOCKED = "locked"           # 资金已锁定
+    RELEASED = "released"       # 资金已释放给卖方
+    REFUNDED = "refunded"       # 资金已退还给买方
+    DISPUTED = "disputed"       # 存在争议
+    EXPIRED = "expired"         # 已过期自动退还
+
+
+class EscrowRecord(Base):
+    """
+    资金托管记录表
+
+    在交易协商期间锁定买方资金，确保交易安全：
+    1. 协商开始前锁定资金
+    2. 协商成功释放给卖方
+    3. 协商失败退还给买方
+    4. 超时自动退还
+    """
+
+    __tablename__ = "escrow_records"
+    __table_args__ = (
+        Index("idx_escrow_negotiation", "negotiation_id"),
+        Index("idx_escrow_buyer", "buyer_id"),
+        Index("idx_escrow_seller", "seller_id"),
+        Index("idx_escrow_status", "status"),
+        Index("idx_escrow_expires", "expires_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    escrow_id = Column(String(32), unique=True, nullable=False)
+
+    # 关联信息
+    negotiation_id = Column(String(64), ForeignKey("negotiation_sessions.negotiation_id"), nullable=False)
+    listing_id = Column(String(32), nullable=False)
+
+    # 交易双方
+    buyer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    seller_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    # 资金信息（单位：分，避免浮点误差）
+    amount_cents = Column(BigInteger, nullable=False)  # 托管金额
+    platform_fee_cents = Column(BigInteger, default=0)  # 平台手续费
+    seller_income_cents = Column(BigInteger, default=0)  # 卖方实际收入
+
+    # 状态
+    status = Column(Enum(EscrowStatus), default=EscrowStatus.LOCKED, nullable=False)
+
+    # 时间戳
+    locked_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    expires_at = Column(DateTime, nullable=False)  # 过期时间（默认24小时）
+    released_at = Column(DateTime, nullable=True)  # 释放时间
+    refunded_at = Column(DateTime, nullable=True)  # 退款时间
+
+    # 操作记录
+    released_by = Column(String(20), nullable=True)  # system/buyer/seller/arbitrator
+    refund_reason = Column(Text, nullable=True)
+
+    # 乐观锁
+    version = Column(Integer, default=1, nullable=False)
+
+    # 元数据
+    metadata_json = Column(JSONB, default=dict)  # 扩展信息
+
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc),
+                        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+    def to_dict(self) -> dict:
+        """转换为字典格式"""
+        return {
+            "escrow_id": self.escrow_id,
+            "negotiation_id": self.negotiation_id,
+            "listing_id": self.listing_id,
+            "buyer_id": self.buyer_id,
+            "seller_id": self.seller_id,
+            "amount": self.amount_cents / 100,  # 转换为元
+            "platform_fee": self.platform_fee_cents / 100,
+            "seller_income": self.seller_income_cents / 100,
+            "status": self.status.value,
+            "locked_at": self.locked_at.isoformat() if self.locked_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "released_at": self.released_at.isoformat() if self.released_at else None,
+            "refunded_at": self.refunded_at.isoformat() if self.refunded_at else None,
+            "refund_reason": self.refund_reason,
+        }
+
+
+class EscrowTransactionLog(Base):
+    """
+    资金托管交易日志
+
+    记录所有资金流动，用于审计和对账
+    """
+
+    __tablename__ = "escrow_transaction_logs"
+    __table_args__ = (
+        Index("idx_escrow_log_escrow", "escrow_id"),
+        Index("idx_escrow_log_user", "user_id"),
+        Index("idx_escrow_log_type", "transaction_type"),
+        Index("idx_escrow_log_created", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    log_id = Column(String(32), unique=True, nullable=False)
+
+    # 关联信息
+    escrow_id = Column(String(32), ForeignKey("escrow_records.escrow_id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    # 交易信息
+    transaction_type = Column(String(20), nullable=False)  # lock/release/refund/fee
+    amount_cents = Column(BigInteger, nullable=False)  # 正数表示入账，负数表示出账
+
+    # 钱包快照
+    wallet_balance_before_cents = Column(BigInteger, nullable=False)
+    wallet_balance_after_cents = Column(BigInteger, nullable=False)
+    escrow_balance_before_cents = Column(BigInteger, nullable=False)
+    escrow_balance_after_cents = Column(BigInteger, nullable=False)
+
+    # 描述
+    description = Column(Text, nullable=True)
+
+    # 元数据
+    metadata_json = Column(JSONB, default=dict)
+
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+
+
+# Escrow relationships
+EscrowRecord.buyer = relationship(
+    "Users",
+    foreign_keys="[EscrowRecord.buyer_id]",
+    back_populates="escrow_records_as_buyer",
+)
+EscrowRecord.seller = relationship(
+    "Users",
+    foreign_keys="[EscrowRecord.seller_id]",
+    back_populates="escrow_records_as_seller",
+)
