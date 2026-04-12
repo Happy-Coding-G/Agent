@@ -5,6 +5,7 @@ import ExplorerView from "../views/ExplorerView";
 import SearchView from "../views/SearchView";
 import AssetsView from "../views/AssetsView";
 import GraphView from "../views/GraphView";
+import UserAgentConfigView from "../views/UserAgentConfigView";
 import SpaceManager from "../pages/SpaceManager";
 
 function GraphEditorView() {
@@ -16,6 +17,7 @@ const VIEWS = {
   search: { title: "Search", component: SearchView },
   assets: { title: "Assets", component: AssetsView },
   kg: { title: "Knowledge Graph Editor", component: GraphEditorView },
+  agent: { title: "Agent Configuration", component: UserAgentConfigView },
 } as const;
 
 type ActivityType = keyof typeof VIEWS;
