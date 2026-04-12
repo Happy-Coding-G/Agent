@@ -5,9 +5,17 @@ from app.core.exception_handlers import setup_exception_handlers
 from app.core.rate_limit import RateLimitMiddleware
 from app.core.config import settings
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title="dataspace", version="1.0")
+
+    # Emit startup validation warnings
+    for warning in settings.validate_critical_settings():
+        logger.warning(warning)
 
     # 注册 API 路由
     app.include_router(api_v1_router, prefix="/api/v1")
@@ -16,14 +24,9 @@ def create_app() -> FastAPI:
     setup_exception_handlers(app)
 
     # CORS 中间件
-    allowed_origins = [
-        origin.strip()
-        for origin in settings.CORS_ALLOWED_ORIGINS.split(",")
-        if origin.strip()
-    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=allowed_origins,
+        allow_origins=settings.cors_origins_list,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

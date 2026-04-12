@@ -148,6 +148,15 @@ class Settings(BaseSettings):
         description="Comma-separated list of allowed CORS origins",
     )
 
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parse CORS_ALLOWED_ORIGINS into a list of origin strings."""
+        return [
+            origin.strip()
+            for origin in self.CORS_ALLOWED_ORIGINS.split(",")
+            if origin.strip()
+        ]
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     def validate_critical_settings(self) -> list[str]:
@@ -174,10 +183,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-
-# Emit warnings at import time so operators notice misconfigurations early.
-import logging as _logging
-
-_startup_logger = _logging.getLogger("app.core.config")
-for _warn in settings.validate_critical_settings():
-    _startup_logger.warning(_warn)
