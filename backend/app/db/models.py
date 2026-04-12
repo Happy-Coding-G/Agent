@@ -2555,7 +2555,7 @@ class TokenUsage(Base):
     error_message = Column(Text, nullable=True)     # 错误信息
 
     # 扩展信息 (JSON格式，存储额外上下文)
-    metadata = Column(JSONB, default=dict)
+    metadata_json = Column(JSONB, default=dict)
 
     # 时间戳
     created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
