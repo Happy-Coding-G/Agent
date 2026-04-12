@@ -9,45 +9,51 @@ from pydantic import Field
 class Settings(BaseSettings):
     # Database (Supabase Postgres)
     DATABASE_URL: str = Field(
-        default="postgresql://postgres.sphuojdyeskgqlqiseui:%40200211Gxl123@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
+        default="postgresql://user:password@localhost:5432/dbname",
+        description="PostgreSQL connection URL (override via env var)",
     )
     DB_SSLMODE: str = Field(default="require")
 
     # MinIO
     MINIO_ENDPOINT: str = Field(default="127.0.0.1:9000")
-    MINIO_ACCESS_KEY: str = Field(default="admin")
-    MINIO_SECRET_KEY: str = Field(default="minio123")
+    MINIO_ACCESS_KEY: str = Field(default="minioadmin")
+    MINIO_SECRET_KEY: str = Field(default="minioadmin")
     MINIO_SECURE: bool = Field(default=False)
 
     # LLM / Embeddings (LangChain)
-    DEEPSEEK_API_KEY: str = Field(default="sk-c228bcaa54c744f18043175cbab357ff")
+    DEEPSEEK_API_KEY: str = Field(
+        default="",
+        description="DeepSeek API key (required, set via DEEPSEEK_API_KEY env var)",
+    )
     DEEPSEEK_BASE_URL: str = Field(default="https://api.deepseek.com/v1")
     DEEPSEEK_MODEL: str = Field(default="deepseek-chat")
 
-    QWEN_API_KEY: str = Field(default="sk-b38421b22b814606a99e0a70e589ddbf")
+    QWEN_API_KEY: str = Field(
+        default="",
+        description="Qwen/DashScope API key (required, set via QWEN_API_KEY env var)",
+    )
     QWEN_BASE_URL: str = Field(
         default="https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
     QWEN_EMBEDDING: str = Field(default="text-embedding-v2")
 
     # Remote Embedding (Qwen3-Embedding-4B)
-    REMOTE_EMBEDDING_ENABLED: bool = Field(default=True)
-    REMOTE_EMBEDDING_BASE_URL: str = Field(default="http://10.211.77.10:27701")
-    REMOTE_EMBEDDING_MODEL: str = Field(
-        default="/gemini/data-1/Qwen3-emb-4b/Qwen/Qwen3-Embedding-4B/"
-    )
+    REMOTE_EMBEDDING_ENABLED: bool = Field(default=False)
+    REMOTE_EMBEDDING_BASE_URL: str = Field(default="http://localhost:27701")
+    REMOTE_EMBEDDING_MODEL: str = Field(default="Qwen3-Embedding-4B")
 
     # Remote Rerank (Qwen3-Reranker-4B)
-    REMOTE_RERANK_ENABLED: bool = Field(default=False)  # 暂时禁用rerank服务
-    REMOTE_RERANK_BASE_URL: str = Field(default="http://10.211.77.10:29639")
-    REMOTE_RERANK_MODEL: str = Field(
-        default="/gemini/data-1/Qwen3-rerank-4b/Qwen/Qwen3-Reranker-4B/"
-    )
+    REMOTE_RERANK_ENABLED: bool = Field(default=False)
+    REMOTE_RERANK_BASE_URL: str = Field(default="http://localhost:29639")
+    REMOTE_RERANK_MODEL: str = Field(default="Qwen3-Reranker-4B")
 
     # Neo4j
     NEO4J_URI: str = Field(default="bolt://127.0.0.1:7687")
     NEO4J_USER: str = Field(default="neo4j")
-    NEO4J_PASSWORD: str = Field(default="neo4j123")
+    NEO4J_PASSWORD: str = Field(
+        default="",
+        description="Neo4j password (required, set via NEO4J_PASSWORD env var)",
+    )
     NEO4J_DATABASE: str = Field(default="neo4j")
 
     # Redis / Celery
@@ -128,11 +134,52 @@ class Settings(BaseSettings):
         return url
 
     # Security
-    SECRET_KEY: str = Field(default="secret-key")
+    SECRET_KEY: str = Field(
+        default="",
+        description="JWT signing secret (required, set via SECRET_KEY env var). "
+                    "Generate with: python -c \"import secrets; print(secrets.token_urlsafe(64))\"",
+    )
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
+    # CORS
+    CORS_ALLOWED_ORIGINS: str = Field(
+        default="http://localhost:5173,http://localhost:3000",
+        description="Comma-separated list of allowed CORS origins",
+    )
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parse CORS_ALLOWED_ORIGINS into a list of origin strings."""
+        return [
+            origin.strip()
+            for origin in self.CORS_ALLOWED_ORIGINS.split(",")
+            if origin.strip()
+        ]
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    def validate_critical_settings(self) -> list[str]:
+        """Return a list of warnings for missing/insecure settings."""
+        warnings: list[str] = []
+        if not self.SECRET_KEY:
+            warnings.append(
+                "SECRET_KEY is empty — JWT tokens will be insecure. "
+                "Set SECRET_KEY env var (generate with: "
+                "python -c \"import secrets; print(secrets.token_urlsafe(64))\")"
+            )
+        elif len(self.SECRET_KEY) < 32:
+            warnings.append(
+                "SECRET_KEY is too short (< 32 chars). Use a strong random secret."
+            )
+        if self.DATABASE_URL == "postgresql://user:password@localhost:5432/dbname":
+            warnings.append(
+                "DATABASE_URL is using the placeholder default. "
+                "Set DATABASE_URL env var to your real database."
+            )
+        if not self.DEEPSEEK_API_KEY:
+            warnings.append("DEEPSEEK_API_KEY is empty — LLM features will not work.")
+        return warnings
 
 
 settings = Settings()
