@@ -16,6 +16,8 @@ from app.api.v1.endpoints.memory import router as memory_router
 from app.api.v1.endpoints.lineage import router as lineage_router
 from app.api.v1.endpoints.user_agent import router as user_agent_router
 from app.api.v1.endpoints.token_usage import router as token_usage_router
+from app.api.v1.endpoints.data_rights import router as data_rights_router
+from app.api.v1.endpoints.trade_actions import router as trade_actions_router
 
 api_v1_router = APIRouter()
 api_v1_router.include_router(health_router, tags=["health"])
@@ -33,3 +35,5 @@ api_v1_router.include_router(memory_router, prefix="/memory", tags=["memory"])
 api_v1_router.include_router(lineage_router, prefix="/lineage", tags=["lineage"])
 api_v1_router.include_router(user_agent_router, tags=["user-agent"])
 api_v1_router.include_router(token_usage_router, prefix="/usage", tags=["token-usage"])
+api_v1_router.include_router(data_rights_router, prefix="/rights", tags=["data-rights"])
+api_v1_router.include_router(trade_actions_router, prefix="/trade", tags=["trade-actions"])

@@ -43,6 +43,21 @@ from .trade import (
     TradeService,
     UnifiedTradeService,
 )
+from .trade.trade_action_service import (
+    TradeActionService,
+    TradeAction,
+    TradeActionResult,
+    execute_trade_action,
+)
+
+# Data Rights services
+from .data_rights import (
+    RightsEnforcementEngine,
+    RightEnforcementType,
+    EnforcementPolicy,
+    ENFORCEMENT_POLICIES,
+    enforce_data_access,
+)
 
 __all__ = [
     # Base
@@ -71,4 +86,14 @@ __all__ = [
     "TradeAgentService",
     "TradeNegotiationService",
     "UnifiedTradeService",
+    "TradeActionService",
+    "TradeAction",
+    "TradeActionResult",
+    "execute_trade_action",
+    # Data Rights
+    "RightsEnforcementEngine",
+    "RightEnforcementType",
+    "EnforcementPolicy",
+    "ENFORCEMENT_POLICIES",
+    "enforce_data_access",
 ]
