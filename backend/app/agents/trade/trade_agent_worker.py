@@ -1,11 +1,15 @@
 """
-Trade Agent Worker V2 - Event-driven background task processor.
+Trade Agent Worker V3 - Agent-First Autonomous Executor
 
-基于事件溯源的Agent自动决策：
-- 轮询活跃协商会话
-- 获取最新BlackboardEvents
-- 根据状态投影和用户配置自动响应
-- 防止自循环（不对自己发出的事件响应）
+Agent-First 架构中的自治执行器：
+1. 将 AgentTasks 与 NegotiationSessions 串联
+2. 自动推进下一轮协商
+3. 审批等待和恢复
+4. 超时处理
+5. 自动接受、反报价、拒绝
+6. 结束后结算触发
+
+这是"Agent 自主完成交易协商任务"的关键执行层。
 """
 
 from __future__ import annotations
@@ -13,12 +17,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_
 
 from app.services.trade.trade_negotiation_service import TradeNegotiationService
-from app.db.models import UserAgentConfig, NegotiationSessions
+from app.services.trade.negotiation_kernel import NegotiationKernel
+from app.services.trade.mechanism_selection_policy import select_mechanism
+from app.services.trade.approval_policy_service import ApprovalPolicyService
+from app.services.trade.decision_log_service import DecisionLogService
+from app.db.models import UserAgentConfig, NegotiationSessions, AgentTasks
 from app.core.errors import ServiceError
 
 logger = logging.getLogger(__name__)
@@ -26,20 +35,28 @@ logger = logging.getLogger(__name__)
 
 class TradeAgentWorker:
     """
-    交易Agent工作器V2 - 基于事件溯源的后台自动处理。
+    交易Agent工作器V3 - Agent-First 自治执行器。
 
-    运行逻辑：
-    1. 轮询活跃协商会话 (status in ["pending", "active"])
-    2. 获取每个会话的最新BlackboardEvents
-    3. 通过state_projector计算current_turn
-    4. 加载用户AgentConfig
-    5. 若use_llm_decision=True且轮到该用户，自动响应
-    6. 防止自循环：不对自己发出的事件做响应
+    Agent-First 架构中的关键执行层：
+    1. 轮询活跃的 AgentTasks（trade 类型）
+    2. 将任务与 NegotiationSessions 串联
+    3. 自动推进协商回合
+    4. 处理审批等待和恢复
+    5. 超时处理
+    6. 结算触发
+
+    自治能力：
+    - 自动选择机制（调用 mechanism_selection_policy）
+    - 自动出价/报价（基于用户配置）
+    - 自动接受/拒绝（基于价格阈值）
+    - 自动触发审批（基于审批策略）
     """
 
     def __init__(self, db: AsyncSession):
         self.db = db
         self.negotiation_service = TradeNegotiationService(db)
+        self.negotiation_kernel = NegotiationKernel(db)
+        self.decision_log = DecisionLogService(db)
         self.running = False
         self.worker_id = f"worker_{id(self)}"
 
@@ -364,6 +381,217 @@ class TradeAgentWorker:
             logger.info(f"Negotiation {session.negotiation_id} expired and terminated")
 
         await self.db.commit()
+
+    # =====================================================================
+    # Agent-First: New Capabilities
+    # =====================================================================
+
+    async def _process_trade_tasks(self):
+        """
+        处理交易目标类型的 AgentTasks。
+
+        Agent-First 核心逻辑：
+        1. 查询 pending/running 的 trade 类型任务
+        2. 关联到 NegotiationSessions
+        3. 推进任务执行
+        """
+        stmt = select(AgentTasks).where(
+            and_(
+                AgentTasks.agent_type == "trade",
+                AgentTasks.status.in_(["pending", "running"]),
+            )
+        )
+        result = await self.db.execute(stmt)
+        tasks = result.scalars().all()
+
+        for task in tasks:
+            try:
+                await self._process_trade_task(task)
+            except Exception as e:
+                logger.exception(f"Failed to process trade task {task.public_id}: {e}")
+
+    async def _process_trade_task(self, task: AgentTasks):
+        """处理单个交易任务。"""
+        input_data = task.input_data or {}
+
+        # 检查是否有关联的协商会话
+        session_id = task.negotiation_session_id
+
+        if not session_id:
+            # 需要创建新的协商会话
+            await self._create_negotiation_for_task(task)
+        else:
+            # 推进现有协商
+            await self._advance_negotiation(task, session_id)
+
+    async def _create_negotiation_for_task(self, task: AgentTasks):
+        """为任务创建协商会话。"""
+        input_data = task.input_data or {}
+        goal_data = input_data.get("goal", {})
+        constraints_data = input_data.get("constraints", {})
+
+        # 机制选择
+        from app.schemas.trade_goal import TradeGoal, TradeConstraints
+
+        goal = TradeGoal(**goal_data)
+        constraints = TradeConstraints(**constraints_data)
+
+        mechanism = select_mechanism(
+            goal=goal,
+            constraints=constraints,
+        )
+
+        # 审批检查
+        approval = ApprovalPolicyService.evaluate_transaction(
+            goal=goal,
+            constraints=constraints,
+        )
+
+        if approval.requires_approval:
+            # 更新任务状态为等待审批
+            task.status = "pending_approval"
+            task.output_data = {
+                **task.output_data,
+                "approval_required": True,
+                "approval_reason": approval.reason,
+                "mechanism": mechanism.dict(),
+            }
+            await self.db.commit()
+
+            # 记录决策
+            await self.decision_log.log_approval_trigger(
+                task_id=task.public_id,
+                trigger_reason=approval.reason,
+                policy_applied=approval.policy_applied,
+            )
+            return
+
+        # 创建协商会话
+        try:
+            result = await self.negotiation_kernel.create_session(
+                mechanism=mechanism.mechanism_type,
+                engine=mechanism.engine_type,
+                seller_id=goal_data.get("seller_id", 0),
+                listing_id=goal_data.get("listing_id"),
+                buyer_id=task.created_by,
+                starting_price=goal.target_price,
+                reserve_price=goal_data.get("min_price") or goal_data.get("max_price"),
+                expected_participants=mechanism.expected_participants,
+                selection_reason=mechanism.selection_reason,
+            )
+
+            if result.success:
+                task.negotiation_session_id = result.session_id
+                task.status = "running"
+                task.output_data = {
+                    **task.output_data,
+                    "session_created": True,
+                    "session_id": result.session_id,
+                    "mechanism": mechanism.dict(),
+                }
+                await self.db.commit()
+
+                logger.info(f"Created session {result.session_id} for task {task.public_id}")
+            else:
+                task.status = "failed"
+                task.error = result.error
+                await self.db.commit()
+
+        except Exception as e:
+            logger.error(f"Failed to create session for task {task.public_id}: {e}")
+            task.status = "failed"
+            task.error = str(e)
+            await self.db.commit()
+
+    async def _advance_negotiation(self, task: AgentTasks, session_id: str):
+        """推进协商会话。"""
+        # 获取当前状态
+        state = await self.negotiation_kernel.get_state(session_id)
+        if not state:
+            logger.warning(f"Session {session_id} not found for task {task.public_id}")
+            return
+
+        # 根据状态决定下一步
+        if state.status.value in ["accepted", "rejected", "cancelled"]:
+            # 协商结束，触发结算
+            await self._finalize_task(task, state)
+        elif state.status.value == "pending_approval":
+            # 等待审批，不处理
+            pass
+        else:
+            # 活跃状态，尝试自动推进
+            await self._auto_advance_round(task, state)
+
+    async def _auto_advance_round(self, task: AgentTasks, state):
+        """自动推进一轮协商。"""
+        # 获取用户配置
+        user_config = await self.negotiation_service.get_or_create_agent_config(
+            task.created_by, "buyer"
+        )
+
+        if not user_config.use_llm_decision:
+            logger.debug(f"Task {task.public_id}: Manual mode, skipping auto-advance")
+            return
+
+        # 根据引擎类型选择推进策略
+        if state.engine_type == "simple":
+            await self._advance_bilateral(task, state, user_config)
+        else:
+            await self._advance_auction(task, state, user_config)
+
+    async def _advance_bilateral(self, task: AgentTasks, state, config):
+        """推进双边协商。"""
+        # 简化实现：基于价格阈值自动决策
+        current_price = state.current_price or 0
+
+        # 获取约束
+        input_data = task.input_data or {}
+        constraints_data = input_data.get("constraints", {})
+        max_budget = constraints_data.get("budget_limit", float("inf"))
+
+        if current_price <= max_budget * 0.95:
+            # 接受报价
+            await self.negotiation_kernel.submit_offer(
+                session_id=state.session_id,
+                user_id=task.created_by,
+                price=current_price,
+                message="Auto-accepted by worker",
+            )
+            logger.info(f"Task {task.public_id}: Auto-accepted offer at {current_price}")
+
+    async def _advance_auction(self, task: AgentTasks, state, config):
+        """推进拍卖。"""
+        # 拍卖自动出价逻辑
+        current_price = state.current_price or 0
+
+        input_data = task.input_data or {}
+        constraints_data = input_data.get("constraints", {})
+        max_budget = constraints_data.get("budget_limit", float("inf"))
+
+        if current_price < max_budget * 0.9:
+            # 自动加价
+            bid_amount = min(current_price * 1.05, max_budget * 0.9)
+            await self.negotiation_kernel.submit_bid(
+                session_id=state.session_id,
+                bidder_id=task.created_by,
+                amount=bid_amount,
+            )
+            logger.info(f"Task {task.public_id}: Auto-placed bid at {bid_amount}")
+
+    async def _finalize_task(self, task: AgentTasks, state):
+        """完成任务。"""
+        task.status = "completed" if state.status.value == "accepted" else "failed"
+        task.finished_at = datetime.now(timezone.utc)
+        task.output_data = {
+            **task.output_data,
+            "final_status": state.status.value,
+            "final_price": state.agreed_price,
+            "session_id": state.session_id,
+        }
+        task.progress_percentage = 100
+        await self.db.commit()
+
+        logger.info(f"Task {task.public_id} finalized with status {state.status.value}")
 
 
 # ========================================================================
