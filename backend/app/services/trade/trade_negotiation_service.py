@@ -1,13 +1,17 @@
 """
-Refactored Trade Negotiation Service - 基于事件溯源黑板模式
+Trade Negotiation Service - 事件溯源协商底座
 
-这个服务展示了如何将传统的黑板模式演进为事件溯源架构。
+Agent-First 架构中的事件溯源底座。
+负责高并发拍卖和复杂协商的事件存储、状态投影。
 
-核心变化：
-1. 不再直接修改黑板状态，而是追加事件
-2. 通过 StateProjector 计算当前状态
-3. 支持 1对1 协商和 1对多 竞拍两种模式
-4. 集成限流和审计
+核心职责：
+1. 事件写入（唯一真相来源）
+2. 状态投影（供查询使用）
+3. 拍卖序列化（AuctionModerator）
+4. 限流和审计
+
+重要：这是 NegotiationKernel 的事件溯源底座，
+主要服务于 AuctionEngine（高并发场景）。
 """
 
 from __future__ import annotations
@@ -33,16 +37,42 @@ from app.services.trade.event_sourcing_blackboard import (
     TemporalGraphMapper,
 )
 
+# Agent-First: 导入领域结果类型
+from app.services.trade.result_types import (
+    NegotiationResult,
+    OfferResult,
+    BidResult,
+    SessionState,
+    AuditEvent,
+    MechanismType,
+    EngineType,
+    NegotiationStatus,
+    create_success_result,
+    create_error_result,
+)
+
 logger = logging.getLogger(__name__)
 
 
 class TradeNegotiationService:
     """
-    重构后的交易协商服务 - 基于事件溯源
-    
-    两种模式：
-    1. 1对1 协商：使用 CAS 乐观锁
-    2. 1对多 竞拍：使用 AuctionModerator 序列化写入
+    交易协商服务 - 事件溯源底座
+
+    Agent-First 架构中的事件溯源协商底座。
+    被 NegotiationKernel 的 AuctionEngine 内部调用。
+
+    核心职责：
+    1. 事件写入（唯一真相来源）
+    2. 状态投影（供查询使用）
+    3. 拍卖序列化（AuctionModerator）
+    4. 限流和审计
+
+    适用场景：
+    - 1对N 拍卖（高并发）
+    - 需要完整审计日志
+    - 事件溯源 replay
+
+    注意：双边协商请使用 SimpleNegotiationService。
     """
     
     def __init__(self, db: AsyncSession):
@@ -1370,6 +1400,67 @@ class TradeNegotiationService:
             # 按时间排序并限制数量
             all_events.sort(key=lambda e: e.event_timestamp, reverse=True)
             return all_events[:limit]
+
+    # =====================================================================
+    # Agent-First: Domain Model Conversions
+    # =====================================================================
+
+    def to_negotiation_result(self, session: NegotiationSessions) -> NegotiationResult:
+        """转换为领域结果对象"""
+        return NegotiationResult(
+            success=True,
+            session_id=session.negotiation_id,
+            status=NegotiationStatus(session.status),
+            mechanism=MechanismType.AUCTION,
+            engine=EngineType.EVENT_SOURCED,
+            seller_id=session.seller_user_id,
+            buyer_id=session.buyer_user_id,
+            winner_id=session.winner_user_id,
+            current_price=session.current_price / 100 if session.current_price else None,
+            agreed_price=session.agreed_price / 100 if session.agreed_price else None,
+            starting_price=session.starting_price / 100 if session.starting_price else None,
+            reserve_price=session.reserve_price / 100 if session.reserve_price else None,
+            current_round=session.current_round,
+            message="Event-sourced negotiation",
+            metadata={
+                "engine_type": "event_sourced",
+                "escrow_id": session.escrow_id,
+            },
+        )
+
+    def to_session_state(self, session: NegotiationSessions) -> SessionState:
+        """转换为会话状态对象"""
+        shared_board = session.shared_board or {}
+
+        return SessionState(
+            session_id=session.negotiation_id,
+            mechanism=MechanismType.AUCTION,
+            engine=EngineType.EVENT_SOURCED,
+            status=NegotiationStatus(session.status),
+            seller_id=session.seller_user_id,
+            buyer_id=session.buyer_user_id,
+            listing_id=session.listing_id,
+            current_price=session.current_price / 100 if session.current_price else None,
+            agreed_price=session.agreed_price / 100 if session.agreed_price else None,
+            starting_price=session.starting_price / 100 if session.starting_price else None,
+            reserve_price=session.reserve_price / 100 if session.reserve_price else None,
+            current_round=session.current_round,
+            max_rounds=session.max_rounds,
+            shared_board=shared_board,
+            engine_type="event_sourced",
+            selection_reason="Event-sourced engine selected for high concurrency",
+        )
+
+    def get_engine_capabilities(self) -> Dict[str, Any]:
+        """获取引擎能力描述"""
+        return {
+            "engine_type": "event_sourced",
+            "supports_concurrent_bids": True,
+            "supports_full_audit": True,
+            "optimistic_locking": True,
+            "max_participants": 1000,
+            "best_for": "1对N拍卖，高并发场景",
+        }
 
 
 # =========================================================================

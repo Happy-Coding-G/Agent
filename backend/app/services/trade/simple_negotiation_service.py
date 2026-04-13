@@ -1,15 +1,18 @@
 """
-Simple Negotiation Service - 简化版协商服务
+Simple Negotiation Service - 双边协商引擎（简化版）
 
-移除事件溯源复杂性，采用直接状态存储：
+Agent-First 架构中的 Bilateral Engine：
 1. 当前状态存储在 NegotiationSessions 表中
 2. 历史记录存储在 shared_board JSONB 字段中
-3. 无需事件重放，查询更高效
+3. 乐观锁（version字段）防并发冲突
+4. O(1) 查询性能，无需事件重放
 
 适用场景：
-- 协商流程相对简单（买卖双方多轮报价）
-- 不需要完整的审计追溯
-- 追求查询性能和代码简洁性
+- 1对1双边协商
+- 低并发场景
+- 快速查询当前状态
+
+重要：这是 NegotiationKernel 的内部引擎，不直接对外暴露。
 """
 
 from __future__ import annotations
@@ -30,17 +33,34 @@ from app.db.models import (
 from app.core.errors import ServiceError
 from app.services.safety import EscrowService
 
+# Agent-First: 导入领域结果类型
+from app.services.trade.result_types import (
+    NegotiationResult,
+    OfferResult,
+    SessionState,
+    AuditEvent,
+    MechanismType,
+    EngineType,
+    NegotiationStatus,
+    create_success_result,
+    create_error_result,
+)
+
 logger = logging.getLogger(__name__)
 
 
 class SimpleNegotiationService:
     """
-    简化版协商服务
+    双边协商引擎（简化版）
+
+    Agent-First 架构中的 Bilateral Engine。
+    被 NegotiationKernel 内部调用，不直接对外暴露。
 
     核心设计：
     - 直接读写当前状态
     - 历史记录追加到 JSONB
-    - 乐观锁防并发冲突
+    - 乐观锁（version字段）防并发冲突
+    - 返回领域结果对象（NegotiationResult/OfferResult）
     """
 
     # 默认协商过期时间（小时）
@@ -191,25 +211,51 @@ class SimpleNegotiationService:
         user_id: int,
         price: float,
         message: str = "",
-    ) -> Dict[str, Any]:
+        expected_version: Optional[int] = None,
+    ) -> OfferResult:
         """
         提交报价
 
-        直接更新当前状态，追加到历史记录。
+        使用乐观锁（version字段）防止并发冲突。
+
+        Args:
+            negotiation_id: 协商会话ID
+            user_id: 用户ID
+            price: 报价
+            message: 附言
+            expected_version: 预期的版本号（乐观锁）
+
+        Returns:
+            OfferResult: 领域结果对象
         """
-        # 1. 获取协商记录
-        result = await self.db.execute(
-            select(NegotiationSessions).where(
-                NegotiationSessions.negotiation_id == negotiation_id
-            )
+        # 1. 获取协商记录（带版本检查）
+        query = select(NegotiationSessions).where(
+            NegotiationSessions.negotiation_id == negotiation_id
         )
+
+        # 如果提供了预期版本，添加版本检查
+        if expected_version is not None:
+            query = query.where(NegotiationSessions.version == expected_version)
+
+        result = await self.db.execute(query)
         session = result.scalar_one_or_none()
 
         if not session:
+            if expected_version is not None:
+                # 版本不匹配或记录不存在
+                return OfferResult(
+                    success=False,
+                    session_id=negotiation_id,
+                    error="Concurrent modification detected. Please refresh and try again.",
+                )
             raise ServiceError(404, "Negotiation not found")
 
         if session.status not in ["pending", "active"]:
-            raise ServiceError(400, f"Negotiation is {session.status}")
+            return OfferResult(
+                success=False,
+                session_id=negotiation_id,
+                error=f"Negotiation is {session.status}",
+            )
 
         # 2. 检查是否是该用户的回合
         shared_board = dict(session.shared_board)
@@ -220,16 +266,25 @@ class SimpleNegotiationService:
         is_seller = user_id == session.seller_user_id
 
         if not is_buyer and not is_seller:
-            raise ServiceError(403, "Not a participant in this negotiation")
+            return OfferResult(
+                success=False,
+                session_id=negotiation_id,
+                error="Not a participant in this negotiation",
+            )
 
         role = "buyer" if is_buyer else "seller"
 
         # 简单回合检查：不能连续报价
         if history and history[-1]["by"] == role:
-            raise ServiceError(400, "Cannot make consecutive offers, wait for the other party")
+            return OfferResult(
+                success=False,
+                session_id=negotiation_id,
+                error="Cannot make consecutive offers, wait for the other party",
+            )
 
-        # 3. 更新状态
+        # 3. 更新状态和版本
         new_round = session.current_round + 1
+        new_version = session.version + 1
 
         # 4. 追加历史记录
         history.append({
@@ -240,6 +295,7 @@ class SimpleNegotiationService:
             "by_id": user_id,
             "message": message,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "version": new_version,  # 记录版本
         })
 
         # 5. 更新价格演进
@@ -253,59 +309,95 @@ class SimpleNegotiationService:
             "price": price,
             "by": role,
             "message": message,
+            "version": new_version,
         }
 
-        # 7. 更新会话
+        # 7. 更新会话（乐观锁：version 自动递增）
         session.status = "active"
         session.current_round = new_round
         session.current_price = int(price * 100)  # 转换为分
         session.shared_board = shared_board
         session.last_activity_at = datetime.now(timezone.utc)
+        session.version = new_version  # 递增版本
 
         await self.db.commit()
 
-        return {
-            "success": True,
-            "negotiation_id": negotiation_id,
-            "round": new_round,
-            "price": price,
-            "status": session.status,
-            "message": f"Offer of {price} made by {role}",
-        }
+        return OfferResult(
+            success=True,
+            session_id=negotiation_id,
+            offer_accepted=False,
+            new_price=price,
+            message=f"Offer of {price} made by {role}",
+            status=NegotiationStatus.ACTIVE,
+            current_round=new_round,
+            remaining_rounds=session.max_rounds - new_round,
+        )
 
     async def respond_to_offer(
         self,
         negotiation_id: str,
         user_id: int,
         response: str,  # "accept", "reject"
-    ) -> Dict[str, Any]:
+        expected_version: Optional[int] = None,
+    ) -> OfferResult:
         """
         响应报价（接受或拒绝）
+
+        使用乐观锁防止并发冲突。
+
+        Args:
+            negotiation_id: 协商会话ID
+            user_id: 用户ID
+            response: 响应类型（"accept" 或 "reject"）
+            expected_version: 预期的版本号
+
+        Returns:
+            OfferResult: 领域结果对象
         """
-        result = await self.db.execute(
-            select(NegotiationSessions).where(
-                NegotiationSessions.negotiation_id == negotiation_id
-            )
+        query = select(NegotiationSessions).where(
+            NegotiationSessions.negotiation_id == negotiation_id
         )
+
+        if expected_version is not None:
+            query = query.where(NegotiationSessions.version == expected_version)
+
+        result = await self.db.execute(query)
         session = result.scalar_one_or_none()
 
         if not session:
+            if expected_version is not None:
+                return OfferResult(
+                    success=False,
+                    session_id=negotiation_id,
+                    error="Concurrent modification detected. Please refresh and try again.",
+                )
             raise ServiceError(404, "Negotiation not found")
 
         if session.status != "active":
-            raise ServiceError(400, f"Negotiation is {session.status}")
+            return OfferResult(
+                success=False,
+                session_id=negotiation_id,
+                error=f"Negotiation is {session.status}",
+            )
 
         # 确定角色
         is_buyer = user_id == session.buyer_user_id
         is_seller = user_id == session.seller_user_id
 
         if not is_buyer and not is_seller:
-            raise ServiceError(403, "Not a participant")
+            return OfferResult(
+                success=False,
+                session_id=negotiation_id,
+                error="Not a participant",
+            )
 
         role = "buyer" if is_buyer else "seller"
 
         shared_board = dict(session.shared_board)
         history = shared_board.get("history", [])
+
+        # 新版本号
+        new_version = session.version + 1
 
         if response == "accept":
             # 接受报价
@@ -324,11 +416,11 @@ class SimpleNegotiationService:
                 "by": role,
                 "by_id": user_id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "version": new_version,
             })
 
-            # TODO: 触发资金释放
-
             message = f"Offer accepted! Deal closed at {agreed_price}"
+            status = NegotiationStatus.ACCEPTED
 
         elif response == "reject":
             # 拒绝报价
@@ -338,26 +430,35 @@ class SimpleNegotiationService:
                 "by": role,
                 "by_id": user_id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "version": new_version,
             })
 
             message = "Offer rejected"
+            status = NegotiationStatus.ACTIVE  # 保持活跃，可继续协商
 
         else:
-            raise ServiceError(400, f"Invalid response: {response}")
+            return OfferResult(
+                success=False,
+                session_id=negotiation_id,
+                error=f"Invalid response: {response}",
+            )
 
         shared_board["history"] = history
         session.shared_board = shared_board
         session.last_activity_at = datetime.now(timezone.utc)
+        session.version = new_version  # 递增版本
 
         await self.db.commit()
 
-        return {
-            "success": True,
-            "negotiation_id": negotiation_id,
-            "response": response,
-            "status": session.status,
-            "message": message,
-        }
+        return OfferResult(
+            success=True,
+            session_id=negotiation_id,
+            offer_accepted=(response == "accept"),
+            new_price=agreed_price if response == "accept" else None,
+            message=message,
+            status=status,
+            current_round=session.current_round + 1,
+        )
 
     async def get_negotiation_status(
         self,
@@ -485,4 +586,65 @@ class SimpleNegotiationService:
             "negotiation_id": negotiation_id,
             "status": "cancelled",
             "message": "Negotiation withdrawn. Earnest money refunded.",
+        }
+
+    # ========================================================================
+    # Domain Model Conversions (Agent-First)
+    # ========================================================================
+
+    def to_negotiation_result(self, session: NegotiationSessions) -> NegotiationResult:
+        """转换为领域结果对象"""
+        shared_board = session.shared_board or {}
+
+        return NegotiationResult(
+            success=True,
+            session_id=session.negotiation_id,
+            status=NegotiationStatus(session.status),
+            mechanism=MechanismType.BILATERAL,
+            engine=EngineType.SIMPLE,
+            seller_id=session.seller_user_id,
+            buyer_id=session.buyer_user_id,
+            current_price=session.current_price / 100 if session.current_price else None,
+            agreed_price=session.agreed_price / 100 if session.agreed_price else None,
+            current_round=session.current_round,
+            max_rounds=session.max_rounds,
+            message="Bilateral negotiation",
+            metadata={
+                "engine_type": "simple",
+                "version": session.version,
+                "shared_board": shared_board,
+            },
+        )
+
+    def to_session_state(self, session: NegotiationSessions) -> SessionState:
+        """转换为会话状态对象"""
+        shared_board = session.shared_board or {}
+
+        return SessionState(
+            session_id=session.negotiation_id,
+            mechanism=MechanismType.BILATERAL,
+            engine=EngineType.SIMPLE,
+            status=NegotiationStatus(session.status),
+            seller_id=session.seller_user_id,
+            buyer_id=session.buyer_user_id,
+            listing_id=session.listing_id,
+            current_price=session.current_price / 100 if session.current_price else None,
+            agreed_price=session.agreed_price / 100 if session.agreed_price else None,
+            current_round=session.current_round,
+            max_rounds=session.max_rounds,
+            version=session.version,
+            shared_board=shared_board,
+            engine_type="simple",
+            selection_reason="Bilateral engine selected for 1-on-1 negotiation",
+        )
+
+    def get_engine_capabilities(self) -> Dict[str, Any]:
+        """获取引擎能力描述"""
+        return {
+            "engine_type": "simple",
+            "supports_concurrent_bids": False,
+            "supports_full_audit": False,
+            "optimistic_locking": True,
+            "max_participants": 2,
+            "best_for": "1对1双边协商，低并发场景",
         }
