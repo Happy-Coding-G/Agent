@@ -504,6 +504,35 @@ class AgentTasks(Base):
         onupdate=datetime.datetime.utcnow,
     )
 
+    # =========================================================================
+    # Agent-First: Trade Goal Support
+    # =========================================================================
+
+    # 关联的协商会话ID
+    negotiation_session_id: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+
+    # 交易目标类型
+    trade_goal_type: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )  # sell_asset, buy_asset, price_inquiry
+
+    # 执行计划ID
+    execution_plan_id: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+
+    # 进度跟踪（0-100）
+    progress_percentage: Mapped[int] = mapped_column(
+        Integer, server_default=text("0"), nullable=False
+    )
+
+    # 当前步骤
+    current_step: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+
 
 class AssetClusters(Base):
     """Asset clustering results for organization."""
@@ -1156,6 +1185,50 @@ class NegotiationSessions(Base):
     # 添加乐观锁版本号
     version: Mapped[int] = mapped_column(
         Integer, server_default=text("1"), nullable=False
+    )
+
+    # =========================================================================
+    # Agent-First 新增字段
+    # =========================================================================
+
+    # 引擎类型（创建时确定，后续不可变）
+    engine_type: Mapped[str] = mapped_column(
+        String(16), server_default=text("'simple'"), nullable=False
+    )  # simple, event_sourced
+
+    # 机制选择原因
+    selection_reason: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+
+    # 自治模式
+    autonomy_mode: Mapped[str] = mapped_column(
+        String(16), server_default=text("'notify'"), nullable=False
+    )  # full_auto, notify, approval, manual_step
+
+    # 审批状态
+    approval_status: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True
+    )  # pending, approved, rejected
+
+    # 关联任务ID
+    initiating_task_id: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+
+    # 预期参与者数量
+    expected_participants: Mapped[int] = mapped_column(
+        Integer, server_default=text("2"), nullable=False
+    )
+
+    # 是否需要完整审计
+    requires_full_audit: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("false"), nullable=False
+    )
+
+    # 最后投影版本（事件溯源用）
+    last_projection_version: Mapped[int] = mapped_column(
+        Integer, server_default=text("0"), nullable=False
     )
 
     # Relationships
