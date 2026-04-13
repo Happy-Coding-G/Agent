@@ -199,7 +199,6 @@ class UserAgentService:
         self,
         user_id: int,
         config_data: Dict[str, Any],
-        skip_safety_check: bool = False
     ) -> UserAgentConfig:
         """
         更新用户 Agent 配置
@@ -207,20 +206,24 @@ class UserAgentService:
         Args:
             user_id: 用户ID
             config_data: 配置数据字典
-            skip_safety_check: 是否跳过安全审核（仅用于管理场景）
 
         Returns:
             更新后的 UserAgentConfig
 
         Raises:
             ServiceError: 如果安全审核未通过
+
+        Note:
+            所有 system_prompt 都必须经过安全审核，不可跳过。
+            这是强制性的安全要求。
         """
         from app.services.safety import PromptSafetyService
 
         config = await self.get_or_create_config(user_id)
 
-        # 安全审核：检查 system_prompt
-        if "system_prompt" in config_data and not skip_safety_check:
+        # 安全审核：强制检查 system_prompt
+        # ⚠️ 安全警告：绝不可添加跳过安全审查的参数或后门
+        if "system_prompt" in config_data:
             system_prompt = config_data["system_prompt"]
             safety_service = PromptSafetyService(self.db)
             safety_result = await safety_service.validate_system_prompt(

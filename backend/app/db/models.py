@@ -820,9 +820,10 @@ class TradeWallets(Base):
     )
 
     # Balances in cents (avoid floating point)
+    # SECURITY: Default is 0 to prevent abuse. Users must complete KYC to deposit.
     liquid_credits: Mapped[int] = mapped_column(
-        BigInteger, server_default=text("100000")
-    )  # Default 1000.00
+        BigInteger, server_default=text("0")
+    )  # Default 0.00 - requires deposit/KYC
     cumulative_sales_earnings: Mapped[int] = mapped_column(
         BigInteger, server_default=text("0")
     )
@@ -1123,6 +1124,11 @@ class NegotiationSessions(Base):
     # Shared state board (JSON) - 完整协商上下文
     # 包含：历史记录、双方策略、当前状态等
     shared_board: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'"))
+
+    # Escrow: 资金托管关联
+    escrow_id: Mapped[Optional[str]] = mapped_column(
+        String(32), ForeignKey("escrow_records.escrow_id"), nullable=True
+    )
 
     # Settlement info
     settlement_result: Mapped[Optional[dict]] = mapped_column(JSONB)
