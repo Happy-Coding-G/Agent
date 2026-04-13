@@ -20,6 +20,7 @@ from app.api.v1.endpoints.data_rights import router as data_rights_router
 from app.api.v1.endpoints.trade_actions import router as trade_actions_router
 from app.api.v1.endpoints.negotiations import router as negotiations_router
 from app.api.v1.endpoints.trade_batch import router as trade_batch_router
+from app.api.v1.endpoints.hybrid_negotiations import router as hybrid_negotiations_router
 
 api_v1_router = APIRouter()
 api_v1_router.include_router(health_router, tags=["health"])
@@ -41,3 +42,4 @@ api_v1_router.include_router(data_rights_router, prefix="/rights", tags=["data-r
 api_v1_router.include_router(trade_actions_router, prefix="/trade", tags=["trade-actions"])
 api_v1_router.include_router(negotiations_router, prefix="/negotiations", tags=["negotiations"])
 api_v1_router.include_router(trade_batch_router, prefix="/batch", tags=["trade-batch"])
+api_v1_router.include_router(hybrid_negotiations_router, prefix="/hybrid-negotiations", tags=["hybrid-negotiations"])
