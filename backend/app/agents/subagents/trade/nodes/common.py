@@ -1,23 +1,52 @@
 """
-Common Trade Nodes
+Common Trade Nodes - Agent-First Architecture
 
 通用交易处理节点，被多个工作流复用
+
+重要：机制选择只能通过 mechanism_selection_policy 模块进行，
+不允许本地策略映射。
 """
 import logging
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from app.agents.subagents.trade.state import TradeState
+
+if TYPE_CHECKING:
+    from app.services.trade.mechanism_selection_policy import MechanismSelectionPolicy
 
 logger = logging.getLogger(__name__)
 
 
 async def validate_input(self, state: TradeState) -> TradeState:
-    """验证输入参数"""
+    """
+    验证输入参数
+
+    支持两种输入模式：
+    1. Agent-First: goal_type + trade_goal + trade_constraints
+    2. Legacy: action + 其他参数
+    """
     try:
+        # 检查 Agent-First 模式
+        goal_type = state.get("goal_type")
+        trade_goal = state.get("trade_goal")
+
+        if goal_type and trade_goal:
+            # Agent-First 模式验证
+            valid_intents = ["sell_asset", "buy_asset", "price_inquiry"]
+            if goal_type not in valid_intents:
+                state["success"] = False
+                state["error"] = f"Invalid goal_type: {goal_type}. Must be one of {valid_intents}"
+                return state
+
+            state["success"] = True
+            return state
+
+        # 兼容旧模式
         action = state.get("action")
         if not action:
             state["success"] = False
-            state["error"] = "Missing required field: action"
+            state["error"] = "Missing required field: action or goal_type"
             return state
 
         valid_actions = ["listing", "purchase", "auction_bid", "bilateral", "yield"]
@@ -113,31 +142,74 @@ async def calculate_price(self, state: TradeState) -> TradeState:
 
 
 async def select_mechanism(self, state: TradeState) -> TradeState:
-    """选择交易机制"""
+    """
+    选择交易机制
+
+    重要：所有机制选择必须调用 mechanism_selection_policy 模块，
+    不允许本地策略映射。
+    """
     if not state.get("success"):
         return state
 
     try:
+        # Agent-First 模式：使用统一的机制选择策略
+        goal_type = state.get("goal_type")
+        if goal_type:
+            from app.schemas.trade_goal import TradeGoal, TradeConstraints
+            from app.services.trade.mechanism_selection_policy import (
+                select_mechanism,
+                MarketContext,
+                RiskContext,
+            )
+
+            goal = TradeGoal(**state.get("trade_goal", {}))
+            constraints = TradeConstraints(**state.get("trade_constraints", {}))
+
+            # 使用统一策略选择机制
+            mechanism = select_mechanism(
+                goal=goal,
+                constraints=constraints,
+                market_context=state.get("market_context") or MarketContext(),
+                risk_context=state.get("risk_context") or RiskContext(),
+            )
+
+            state["mechanism_selection"] = mechanism.dict()
+            state["engine_type"] = mechanism.engine_type
+            state["selected_mechanism"] = mechanism.mechanism_type
+            state["approval_required"] = mechanism.requires_approval
+
+            # 记录决策
+            if "decisions" not in state:
+                state["decisions"] = []
+            state["decisions"].append({
+                "type": "mechanism_selection",
+                "decision": mechanism.mechanism_type,
+                "reason": mechanism.selection_reason,
+                "engine": mechanism.engine_type,
+            })
+
+            return state
+
+        # 兼容旧模式：保留原有逻辑但简化
         mechanism_hint = state.get("mechanism_hint")
         if mechanism_hint:
             state["selected_mechanism"] = mechanism_hint
             return state
 
-        pricing_strategy = state.get("pricing_strategy", "negotiable")
-
-        strategy_map = {
-            "negotiable": "bilateral",
-            "auction": "auction",
-            "competitive": "contract_net",
-            "fixed": "fixed_price",
-        }
-
-        state["selected_mechanism"] = strategy_map.get(pricing_strategy, "bilateral")
+        # 旧模式不使用本地策略映射，默认 bilateral
+        state["selected_mechanism"] = "bilateral"
         return state
 
     except Exception as e:
         logger.error(f"Mechanism selection failed: {e}")
         state["selected_mechanism"] = "bilateral"
+        state["mechanism_selection"] = {
+            "mechanism_type": "bilateral",
+            "engine_type": "simple",
+            "selection_reason": f"Error during selection: {e}",
+            "expected_participants": 2,
+            "requires_approval": False,
+        }
         return state
 
 
