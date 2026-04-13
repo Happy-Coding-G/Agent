@@ -140,9 +140,38 @@ class TradeNegotiationService:
                 "message": "Existing negotiation found",
                 "is_new": False,
             }
-        
-        # 5. 创建协商会话
-        negotiation_id = uuid.uuid4().hex[:32]
+
+        # 5. 计算并锁定诚意金（标价的5%，最低10元）
+        listing_price = listing.price_credits if hasattr(listing, 'price_credits') else 0
+        earnest_money = max(listing_price * 0.05, 1000)  # 5%或最低10元(1000分)
+
+        # 检查买方余额是否足够支付诚意金
+        from app.services.safety import EscrowService
+        escrow_service = EscrowService(self.db)
+
+        # 先尝试锁定诚意金，如果失败则不创建协商
+        try:
+            # 创建临时协商ID用于诚意金锁定
+            temp_negotiation_id = uuid.uuid4().hex[:32]
+            escrow = await escrow_service.lock_funds(
+                negotiation_id=temp_negotiation_id,
+                buyer_id=buyer_id,
+                seller_id=listing.seller_user_id,
+                listing_id=listing_id,
+                amount=earnest_money / 100,  # 转换为元
+                expiry_hours=72,  # 诚意金有效期72小时
+            )
+            escrow_id = escrow.escrow_id
+        except Exception as e:
+            logger.warning(f"Failed to lock earnest money for buyer {buyer_id}: {e}")
+            raise ServiceError(
+                400,
+                f"无法创建协商：需要支付诚意金 {earnest_money/100:.2f} 元，" +
+                "请确保账户余额充足。诚意金将在协商成功时转为部分货款，协商取消时全额退还。"
+            )
+
+        # 6. 创建协商会话
+        negotiation_id = temp_negotiation_id
         
         session = NegotiationSessions(
             negotiation_id=negotiation_id,
@@ -152,11 +181,17 @@ class TradeNegotiationService:
             status="pending",
             current_round=0,
             seller_floor_price=listing.reserve_price or 0,
+            escrow_id=escrow_id,  # 关联托管记录
             shared_board={
                 "initiated_by": "buyer",
                 "buyer_requirements": requirements,
                 "negotiation_history": [],
                 "price_evolution": [],
+                "earnest_money": {
+                    "amount_cents": int(earnest_money),
+                    "escrow_id": escrow_id,
+                    "locked_at": datetime.utcnow().isoformat(),
+                },
             },
         )
         
