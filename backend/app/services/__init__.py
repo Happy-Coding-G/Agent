@@ -49,6 +49,13 @@ from .trade.trade_action_service import (
     TradeActionResult,
     execute_trade_action,
 )
+from .trade.simple_negotiation_service import (
+    SimpleNegotiationService,
+)
+from .trade.batch_operations_service import (
+    TradeBatchOperationsService,
+    BatchOperationResult,
+)
 
 # Data Rights services
 from .data_rights import (
@@ -90,6 +97,9 @@ __all__ = [
     "TradeAction",
     "TradeActionResult",
     "execute_trade_action",
+    "SimpleNegotiationService",
+    "TradeBatchOperationsService",
+    "BatchOperationResult",
     # Data Rights
     "RightsEnforcementEngine",
     "RightEnforcementType",
