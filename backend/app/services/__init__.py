@@ -7,6 +7,18 @@ Services package
 # Base
 from .base import SpaceAwareService
 
+# LLM Gateway - 个人LLM与系统LLM功能划分
+from .llm_gateway import (
+    LLMGateway,
+    PersonalLLMClient,
+    SystemLLMClient,
+    SystemFeatureType,
+    LLMTaskClassifier,
+    get_personal_llm,
+    get_system_llm,
+    llm_route_and_invoke,
+)
+
 # Domain services
 from .asset_service import AssetService
 from .auth_service import AuthService
@@ -35,6 +47,15 @@ from .trade import (
 __all__ = [
     # Base
     "SpaceAwareService",
+    # LLM Gateway
+    "LLMGateway",
+    "PersonalLLMClient",
+    "SystemLLMClient",
+    "SystemFeatureType",
+    "LLMTaskClassifier",
+    "get_personal_llm",
+    "get_system_llm",
+    "llm_route_and_invoke",
     # Domain
     "AssetService",
     "AuthService",

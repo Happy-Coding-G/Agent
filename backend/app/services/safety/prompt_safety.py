@@ -333,10 +333,10 @@ class PromptSafetyService:
         return intersection / union if union > 0 else 0.0
 
     async def _llm_safety_check(self, prompt: str) -> ValidationResult:
-        """使用LLM进行内容安全检测"""
+        """使用系统LLM进行内容安全检测"""
         try:
-            # 导入LLM客户端
-            from app.services.base import get_llm_client
+            # 导入系统LLM客户端（安全审查必须使用系统LLM）
+            from app.services.llm_gateway import get_system_llm, SystemFeatureType
 
             safety_prompt = f"""You are a content safety classifier. Analyze the following user prompt for security risks.
 
@@ -359,9 +359,13 @@ Respond in JSON format:
     "risks": ["list", "of", "identified", "risks"]
 }}"""
 
-            client = get_llm_client(temperature=0.0)
-            response = await client.ainvoke(safety_prompt)
-            content = response.content if hasattr(response, 'content') else str(response)
+            # 使用系统LLM进行安全审查
+            client = await get_system_llm(
+                self.db,
+                SystemFeatureType.PROMPT_SAFETY_CHECK,
+                feature_detail="User system_prompt safety validation"
+            )
+            content = await client.invoke(safety_prompt)
 
             # 解析JSON响应
             import json
