@@ -31,6 +31,19 @@ from app.services.user_agent_service import UserAgentService, UserAgentSettings
 from app.agents.subagents.trade.graph import create_trade_graph
 from app.agents.subagents.trade.state import TradeState
 
+# Agent-First imports
+from app.schemas.trade_goal import (
+    TradeGoal,
+    TradeConstraints,
+    MechanismSelection,
+    TradeExecutionPlan,
+)
+from app.services.trade.mechanism_selection_policy import (
+    select_mechanism,
+    MarketContext,
+    RiskContext,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -94,6 +107,135 @@ class TradeAgent(SpaceAwareService):
         return await self.user_agent_service.get_user_llm_client(
             user_id, temperature=temperature
         )
+
+    # ========================================================================
+    # Agent-First API (Unified Trade Goal Execution)
+    # ========================================================================
+
+    async def execute_trade_goal(
+        self,
+        goal: TradeGoal,
+        constraints: TradeConstraints,
+        user: Users,
+        task_id: Optional[str] = None,
+        space_public_id: Optional[str] = None,
+    ) -> TradeExecutionPlan:
+        """
+        统一交易目标执行入口 (Agent-First 核心)
+
+        这是未来交易协商的唯一主入口。
+        Agent 负责：
+        1. 理解目标
+        2. 选择机制 (bilateral/auction/direct)
+        3. 推进协商
+        4. 执行风控与结算
+
+        Args:
+            goal: 交易目标
+            constraints: 交易约束
+            user: 当前用户
+            task_id: 关联的 AgentTask ID
+            space_public_id: Space ID (可选)
+
+        Returns:
+            TradeExecutionPlan: 执行计划（包含状态和进展）
+        """
+        plan_id = str(uuid.uuid4())[:32]
+
+        # 1. 构建初始状态
+        initial_state: TradeState = {
+            "goal_type": goal.intent.value,
+            "trade_goal": goal.dict(),
+            "trade_constraints": constraints.dict(),
+            "task_id": task_id,
+            "plan_id": plan_id,
+            "user_id": user.id,
+            "autonomy_mode": constraints.autonomy_mode.value,
+            "approval_required": False,
+            "current_step": "normalize_goal",
+            "success": True,
+            "result": {},
+            "decisions": [],
+            "started_at": datetime.utcnow(),
+        }
+
+        if space_public_id:
+            initial_state["space_public_id"] = space_public_id
+
+        # 2. 执行完整交易目标图
+        try:
+            final_state = await self.graph.ainvoke(initial_state)
+
+            # 3. 构建执行计划结果
+            plan = TradeExecutionPlan(
+                plan_id=plan_id,
+                goal=goal,
+                constraints=constraints,
+                mechanism=MechanismSelection(
+                    **final_state.get("mechanism_selection", {})
+                ),
+                status="completed" if final_state.get("success") else "failed",
+                steps=final_state.get("decisions", []),
+                task_id=task_id,
+                session_id=final_state.get("session_id"),
+                result=final_state.get("result", {}),
+            )
+
+            return plan
+
+        except Exception as e:
+            logger.exception(f"Trade goal execution failed: {e}")
+            return TradeExecutionPlan(
+                plan_id=plan_id,
+                goal=goal,
+                constraints=constraints,
+                mechanism=MechanismSelection(
+                    mechanism_type="bilateral",
+                    engine_type="simple",
+                    selection_reason=f"Error during execution: {e}",
+                    expected_participants=2,
+                    requires_approval=True,
+                ),
+                status="failed",
+                error=str(e),
+                task_id=task_id,
+            )
+
+    async def run_goal(
+        self,
+        goal: TradeGoal,
+        constraints: TradeConstraints,
+        user: Users,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        便捷的 TradeGoal 执行接口 (兼容 run 方法)
+
+        Args:
+            goal: 交易目标
+            constraints: 交易约束
+            user: 当前用户
+            **kwargs: 其他参数
+
+        Returns:
+            执行结果字典
+        """
+        plan = await self.execute_trade_goal(
+            goal=goal,
+            constraints=constraints,
+            user=user,
+            **kwargs
+        )
+
+        return {
+            "success": plan.status == "completed",
+            "plan_id": plan.plan_id,
+            "status": plan.status,
+            "mechanism": plan.mechanism.dict() if plan.mechanism else None,
+            "session_id": plan.session_id,
+            "result": plan.result,
+            "error": plan.error,
+        }
 
     # ========================================================================
     # High-Level API (Unified Interface via LangGraph)

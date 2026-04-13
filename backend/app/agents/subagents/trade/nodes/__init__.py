@@ -43,5 +43,19 @@ class TradeNodes:
     # 从 purchase 模块导入的节点
     from app.agents.subagents.trade.nodes.purchase import execute_purchase
 
+    # Agent-First 新节点
+    from app.agents.subagents.trade.nodes.agent_first import (
+        normalize_goal,
+        load_user_config,
+        load_asset_context,
+        evaluate_market,
+        evaluate_risk,
+        create_session,
+        run_negotiation,
+        check_approval,
+        settle_or_continue,
+        publish_state,
+    )
+
 
 __all__ = ["TradeNodes"]
