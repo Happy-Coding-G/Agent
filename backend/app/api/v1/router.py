@@ -39,7 +39,24 @@ api_v1_router.include_router(lineage_router, prefix="/lineage", tags=["lineage"]
 api_v1_router.include_router(user_agent_router, tags=["user-agent"])
 api_v1_router.include_router(token_usage_router, prefix="/usage", tags=["token-usage"])
 api_v1_router.include_router(data_rights_router, prefix="/rights", tags=["data-rights"])
-api_v1_router.include_router(trade_actions_router, prefix="/trade", tags=["trade-actions"])
-api_v1_router.include_router(negotiations_router, prefix="/negotiations", tags=["negotiations"])
-api_v1_router.include_router(trade_batch_router, prefix="/batch", tags=["trade-batch"])
-api_v1_router.include_router(hybrid_negotiations_router, prefix="/hybrid-negotiations", tags=["hybrid-negotiations"])
+
+# ============================================================================
+# Agent-First 交易架构路由
+# ============================================================================
+#
+# 交易主流程统一从 agent 入口进入：
+# - POST /api/v1/agent/trade/goal       - 提交交易目标（主入口）
+# - GET  /api/v1/agent/trade/task/{id}  - 查询目标状态
+#
+# 以下路由已降级为兼容/调试/人工兜底接口：
+# - /trade/*           - 确定性操作（保留兼容）
+# - /negotiations/*    - 双边协商（人工操作）
+# - /batch/*           - 批量操作（管理接口）
+# - /hybrid-negotiations/* - 混合协商（调试接口）
+#
+# ============================================================================
+
+api_v1_router.include_router(trade_actions_router, prefix="/trade", tags=["trade-actions-compat"])
+api_v1_router.include_router(negotiations_router, prefix="/negotiations", tags=["negotiations-compat"])
+api_v1_router.include_router(trade_batch_router, prefix="/batch", tags=["trade-batch-compat"])
+api_v1_router.include_router(hybrid_negotiations_router, prefix="/hybrid-negotiations", tags=["hybrid-debug"])

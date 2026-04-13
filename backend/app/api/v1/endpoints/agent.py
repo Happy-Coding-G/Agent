@@ -27,11 +27,24 @@ from app.schemas.schemas import (
     ReviewRequest,
     ReviewResponse,
 )
+from app.schemas.trade_goal import (
+    TradeGoalRequest,
+    TradeGoalResponse,
+    TradeGoalStatus,
+    TradeGoal,
+    TradeConstraints,
+    AutonomyMode,
+)
 from app.services.base import get_llm_client
 from app.agents.core import MainAgent
 from app.agents.state import AgentType
 from app.core.config import settings
 from app.db.models import AgentTasks, AssetClusters, AssetClusterMembership, ReviewLogs
+from app.services.trade.mechanism_selection_policy import (
+    select_mechanism,
+    MarketContext,
+    RiskContext,
+)
 
 from app.db.models import Spaces
 
@@ -629,3 +642,220 @@ async def trigger_review(
             final_status="error",
             rework_count=0,
         )
+
+
+# ============================================================================
+# 交易目标入口 - Agent-First 架构核心
+# ============================================================================
+
+@router.post("/trade/goal", response_model=TradeGoalResponse)
+async def submit_trade_goal(
+    req: TradeGoalRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    提交交易目标
+
+    这是 Agent-First 架构的核心入口。
+    用户只提交交易目标、约束和偏好，Agent 负责：
+    1. 理解目标
+    2. 选择机制 (bilateral/auction/direct)
+    3. 推进协商
+    4. 执行风控与结算
+
+    不直接驱动底层 API，而是创建 AgentTask 让 TradeAgent 异步执行。
+    """
+    try:
+        # 1. 机制选择
+        mechanism = select_mechanism(
+            goal=req.goal,
+            constraints=req.constraints,
+            market_context=MarketContext(),
+            risk_context=RiskContext(
+                is_first_transaction=False,  # 可从用户历史查询
+            ),
+        )
+
+        # 2. 创建标准化输入数据
+        input_data = {
+            "type": "trade_goal",
+            "goal": req.goal.dict(),
+            "constraints": req.constraints.dict(),
+            "mechanism": mechanism.dict(),
+            "user_context": req.user_context,
+        }
+
+        # 3. 创建 AgentTask
+        task = await _create_agent_task_record(
+            db=db,
+            agent_type="trade",
+            input_data=input_data,
+            space_id=0,  # 交易任务可能不绑定特定 space
+            user_id=current_user.id,
+        )
+
+        # 4. 更新为运行状态
+        await _update_agent_task(
+            db,
+            task.public_id,
+            status="pending",
+            output_data={
+                "mechanism": mechanism.dict(),
+                "message": f"交易目标已接收，计划使用 {mechanism.mechanism_type} 机制",
+            },
+        )
+
+        return TradeGoalResponse(
+            success=True,
+            task_id=task.public_id,
+            plan_id=None,  # 将在 TradeAgent 执行时创建
+            status="pending",
+            message=f"交易目标已提交，将使用 {mechanism.mechanism_type} 机制 ({mechanism.engine_type})",
+            estimated_duration_seconds=300 if mechanism.mechanism_type == "bilateral" else 3600,
+            requires_immediate_attention=mechanism.requires_approval,
+            next_steps=[
+                f"机制: {mechanism.mechanism_type}",
+                f"引擎: {mechanism.engine_type}",
+                f"需要审批: {'是' if mechanism.requires_approval else '否'}",
+                "查询状态: GET /api/v1/agent/trade/task/{task_id}",
+            ],
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/trade/goal/sell", response_model=TradeGoalResponse)
+async def submit_sell_goal(
+    asset_id: str,
+    min_price: float,
+    target_price: Optional[float] = None,
+    deadline: Optional[datetime] = None,
+    autonomy_mode: AutonomyMode = AutonomyMode.NOTIFY_BEFORE_ACTION,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    便捷接口：提交自动出售目标
+
+    简化的出售目标提交接口。
+    """
+    from app.schemas.trade_goal import create_sell_goal
+
+    goal = create_sell_goal(
+        asset_id=asset_id,
+        min_price=min_price,
+        target_price=target_price,
+        deadline=deadline,
+    )
+
+    constraints = TradeConstraints(
+        autonomy_mode=autonomy_mode,
+        approval_policy="price_threshold" if min_price > 10000 else "none",
+        approval_threshold=min_price * 0.9,
+    )
+
+    return await submit_trade_goal(
+        TradeGoalRequest(goal=goal, constraints=constraints),
+        current_user,
+        db,
+    )
+
+
+@router.post("/trade/goal/buy", response_model=TradeGoalResponse)
+async def submit_buy_goal(
+    max_price: float,
+    asset_id: Optional[str] = None,
+    listing_id: Optional[str] = None,
+    target_price: Optional[float] = None,
+    autonomy_mode: AutonomyMode = AutonomyMode.NOTIFY_BEFORE_ACTION,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    便捷接口：提交预算内自动购买目标
+
+    简化的购买目标提交接口。
+    """
+    from app.schemas.trade_goal import create_buy_goal
+
+    goal = create_buy_goal(
+        asset_id=asset_id,
+        listing_id=listing_id,
+        max_price=max_price,
+        target_price=target_price or max_price * 0.9,
+    )
+
+    constraints = TradeConstraints(
+        autonomy_mode=autonomy_mode,
+        budget_limit=max_price,
+        approval_policy="price_threshold" if max_price > 10000 else "none",
+        approval_threshold=max_price * 1.1,
+    )
+
+    return await submit_trade_goal(
+        TradeGoalRequest(goal=goal, constraints=constraints),
+        current_user,
+        db,
+    )
+
+
+@router.get("/trade/task/{task_id}", response_model=TradeGoalStatus)
+async def get_trade_task_status(
+    task_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    查询交易目标执行状态
+
+    获取 TradeAgent 执行交易目标的详细状态，包括：
+    - 当前进度
+    - 已做出的决策
+    - 待处理审批
+    - 执行结果
+    """
+    task = await _get_agent_task(db, task_id)
+
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # 解析交易相关信息
+    input_data = task.input_data or {}
+    goal_data = input_data.get("goal", {})
+    mechanism_data = input_data.get("mechanism", {})
+
+    # 计算进度
+    progress_map = {
+        "pending": 0,
+        "running": 50,
+        "completed": 100,
+        "failed": 0,
+    }
+    progress = progress_map.get(task.status, 0)
+
+    # 提取当前步骤
+    output_data = task.output_data or {}
+    current_step = output_data.get("current_step")
+    decisions = output_data.get("decisions", [])
+    pending_decisions = output_data.get("pending_decisions", [])
+
+    return TradeGoalStatus(
+        task_id=task.public_id,
+        plan_id=output_data.get("plan_id"),
+        goal_summary=f"{goal_data.get('intent', 'unknown')}: {goal_data.get('asset_id', 'N/A')}",
+        status=task.status,
+        progress_percentage=progress,
+        current_step=current_step,
+        current_mechanism=mechanism_data.get("mechanism_type"),
+        session_id=output_data.get("session_id"),
+        decisions_made=decisions,
+        pending_decisions=pending_decisions,
+        created_at=task.created_at,
+        started_at=task.started_at,
+        completed_at=task.finished_at,
+        estimated_completion=None,  # 可根据算法估算
+        result=output_data.get("result") if task.status == "completed" else None,
+        error=task.error,
+    )
