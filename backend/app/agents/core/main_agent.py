@@ -4,7 +4,7 @@
 """
 import logging
 import uuid
-from typing import AsyncGenerator, Dict, Any, Optional, Callable
+from typing import AsyncGenerator, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -489,16 +489,9 @@ class MainAgent:
         state["task_result"] = subagent_result
         return state
 
-    # 功能：处理失败后的重试状态。
+    # 功能：处理子 Agent 执行失败。
     async def _handle_error(self, state: MainAgentState) -> MainAgentState:
-        retry_count = state.get("retry_count", 0)
-
-        if retry_count < 3:
-            state["retry_count"] = retry_count + 1
-            state["task_status"] = TaskStatus.PENDING
-        else:
-            state["task_status"] = TaskStatus.FAILED
-
+        state["task_status"] = TaskStatus.FAILED
         return state
 
     # 功能：保留统一的响应格式出口。

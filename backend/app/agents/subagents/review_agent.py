@@ -40,15 +40,19 @@ class ReviewAgent:
         builder.add_node("compliance_check", RunnableLambda(self._compliance_check_node))
         builder.add_node("completeness_check", RunnableLambda(self._completeness_check_node))
         builder.add_node("judge_result", RunnableLambda(self._judge_result_node))
-        builder.add_node("trigger_rework", RunnableLambda(self._trigger_rework_node))
         builder.add_node("finalize", RunnableLambda(self._finalize_node))
 
         builder.add_edge("load_document", "quality_check")
         builder.add_edge("quality_check", "compliance_check")
         builder.add_edge("compliance_check", "completeness_check")
         builder.add_edge("completeness_check", "judge_result")
-        builder.add_edge("judge_result", "trigger_rework")
-        builder.add_edge("trigger_rework", "finalize")
+
+        # 条件分支：需要 rework 且未超限时回到 quality_check 重新审查，否则进入 finalize。
+        builder.add_conditional_edges(
+            "judge_result",
+            self._should_rework,
+            {"rework": "quality_check", "done": "finalize"}
+        )
         builder.add_edge("finalize", END)
 
         builder.set_entry_point("load_document")
@@ -194,6 +198,16 @@ class ReviewAgent:
 
         return state
 
+    def _should_rework(self, state: ReviewState) -> str:
+        """Decide whether to loop back for rework or proceed to finalize."""
+        rework_needed = state.get("rework_needed", False)
+        rework_count = state.get("rework_count", 0)
+        max_rework = state.get("max_rework", self.max_rework)
+
+        if rework_needed and rework_count < max_rework:
+            return "rework"
+        return "done"
+
     async def _judge_result_node(self, state: ReviewState) -> ReviewState:
         """Judge the overall review result and determine if rework is needed."""
         review_result = state.get("review_result", {})
@@ -226,29 +240,17 @@ class ReviewAgent:
         state["rework_needed"] = rework_needed
         state["review_result"] = review_result
 
-        return state
-
-    async def _trigger_rework_node(self, state: ReviewState) -> ReviewState:
-        """Trigger rework if needed and within retry limit."""
-        rework_needed = state.get("rework_needed", False)
+        # Handle rework counter and final_status decision
         rework_count = state.get("rework_count", 0)
         max_rework = state.get("max_rework", self.max_rework)
 
         if rework_needed and rework_count < max_rework:
             state["rework_count"] = rework_count + 1
-            state["review_result"]["rework_triggered"] = True
-            state["review_result"]["rework_message"] = (
-                f"Rework #{rework_count + 1}: Please address the following issues and resubmit."
-            )
         elif rework_needed and rework_count >= max_rework:
             state["final_status"] = "manual_review"
-            state["review_result"]["rework_triggered"] = False
-            state["review_result"]["rework_message"] = (
-                "Max retries exceeded. Escalating to manual review."
-            )
+            state["rework_needed"] = False  # stop looping
         else:
             state["final_status"] = "approved"
-            state["review_result"]["rework_triggered"] = False
 
         return state
 
