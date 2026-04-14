@@ -4,7 +4,7 @@ TradeAgent State unit tests
 Test TradeState TypedDict definitions and type safety.
 """
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.agents.subagents.trade.state import TradeState
 
@@ -21,7 +21,7 @@ class TestTradeState:
             "user_id": 1,
             "user_role": "seller",
             "success": True,
-            "started_at": datetime.utcnow(),
+            "started_at": datetime.now(timezone.utc),
             "result": {},
         }
 
@@ -46,7 +46,7 @@ class TestTradeState:
             "result": {"status": "pending"},
             "calculated_price": 120.0,
             "selected_mechanism": "bilateral",
-            "started_at": datetime.utcnow(),
+            "started_at": datetime.now(timezone.utc),
         }
 
         assert state["pricing_strategy"] == "negotiable"
@@ -62,7 +62,7 @@ class TestTradeState:
             "user_role": "seller",
             "success": False,
             "error": "Invalid asset",
-            "started_at": datetime.utcnow(),
+            "started_at": datetime.now(timezone.utc),
             "result": {},
         }
 
@@ -84,7 +84,7 @@ class TestTradeStateValidation:
                 "user_id": 1,
                 "user_role": "seller",
                 "success": True,
-                "started_at": datetime.utcnow(),
+                "started_at": datetime.now(timezone.utc),
                 "result": {},
             }
             assert state["action"] == action

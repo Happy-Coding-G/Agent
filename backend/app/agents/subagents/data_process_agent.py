@@ -35,7 +35,11 @@ class DataProcessAgent:
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph:
-        """Build the LangGraph StateGraph for data processing."""
+        """Build the LangGraph StateGraph for data processing.
+
+        每一步之后通过条件边检查 error 字段；如果已有错误则直接跳到
+        END，避免后续节点白白消耗资源（short-circuit）。
+        """
         builder = StateGraph(DataProcessState)
 
         builder.add_node("prepare_source", RunnableLambda(self._prepare_source_node))
@@ -46,16 +50,31 @@ class DataProcessAgent:
         builder.add_node("build_knowledge_graph", RunnableLambda(self._build_knowledge_graph_node))
         builder.add_node("save_to_database", RunnableLambda(self._save_to_database_node))
 
-        builder.add_edge("prepare_source", "extract_text")
-        builder.add_edge("extract_text", "convert_markdown")
-        builder.add_edge("convert_markdown", "chunk_document")
-        builder.add_edge("chunk_document", "generate_embeddings")
-        builder.add_edge("generate_embeddings", "build_knowledge_graph")
-        builder.add_edge("build_knowledge_graph", "save_to_database")
+        # 定义流水线顺序，每步结束后检查 error 字段决定是否提前退出。
+        pipeline = [
+            "prepare_source",
+            "extract_text",
+            "convert_markdown",
+            "chunk_document",
+            "generate_embeddings",
+            "build_knowledge_graph",
+            "save_to_database",
+        ]
+        for i in range(len(pipeline) - 1):
+            builder.add_conditional_edges(
+                pipeline[i],
+                self._check_error,
+                {"continue": pipeline[i + 1], "abort": END}
+            )
         builder.add_edge("save_to_database", END)
 
         builder.set_entry_point("prepare_source")
         return builder.compile()
+
+    @staticmethod
+    def _check_error(state: DataProcessState) -> str:
+        """若 state 中已有 error 则跳过剩余节点。"""
+        return "abort" if state.get("error") else "continue"
 
     async def _prepare_source_node(self, state: DataProcessState) -> DataProcessState:
         """Prepare the source for processing - download from MinIO or URL."""

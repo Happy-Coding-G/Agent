@@ -25,7 +25,7 @@ print("\n[Test 1] Skills 模块导入")
 print("-" * 50)
 
 try:
-    from app.agents.skills import (
+    from app.services.skills import (
         PricingSkill,
         DataLineageSkill,
         MarketAnalysisSkill,
