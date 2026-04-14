@@ -35,6 +35,7 @@ class SubAgents:
         self._space_path = space_path
         self._agents: Dict[AgentType, Any] = {}
         self._graphs: Dict[AgentType, Any] = {}
+        self._handlers: Dict[AgentType, Any] = {}  # 注册表：AgentType → handler
         self._initialized = False
 
     # 功能：延迟加载并注册所有子 Agent。
@@ -72,6 +73,17 @@ class SubAgents:
             # TradeAgent 现在使用 LangGraph，与其他 Agent 统一架构
             self._graphs[AgentType.TRADE] = self._agents[AgentType.TRADE].graph
 
+            # 注册各 AgentType 的调用处理器（注册表模式，新增 Agent 只需在此添加一行）。
+            self._handlers = {
+                AgentType.FILE_QUERY: self._invoke_file_query,
+                AgentType.QA: self._invoke_qa,
+                AgentType.DATA_PROCESS: self._invoke_data_process,
+                AgentType.REVIEW: self._invoke_review,
+                AgentType.ASSET_ORGANIZE: self._invoke_asset_organize,
+                AgentType.TRADE: self._invoke_trade,
+                AgentType.CHAT: self._invoke_chat,
+            }
+
             self._initialized = True
             logger.info("All sub-agents initialized successfully")
 
@@ -88,124 +100,15 @@ class SubAgents:
         # 确保子 Agent 已完成初始化。
         self._lazy_init()
 
-        if agent_type not in self._graphs:
+        handler = self._handlers.get(agent_type)
+        if not handler:
             return {
                 "error": f"Sub-agent {agent_type.value} not available",
                 "success": False
             }
 
         try:
-            agent = self._agents.get(agent_type)
-            graph = self._graphs.get(agent_type)
-
-            if agent_type == AgentType.FILE_QUERY:
-                # 文件查询 Agent 直接执行 run。
-                query = input_state.get("user_request", "")
-                return await agent.run(query)
-
-            elif agent_type == AgentType.QA:
-                # QA Agent 走统一问答接口。
-                qa_agent = self._agents.get(AgentType.QA)
-
-                user = await _get_user(self._db, input_state.get("user_id"))
-
-                if not user:
-                    return {
-                        "success": False,
-                        "error": "User not found for QA agent",
-                        "agent_type": "qa"
-                    }
-
-                # 调用统一 QA 入口。
-                return await qa_agent.run(
-                    query=input_state.get("user_request", ""),
-                    space_public_id=input_state.get("space_id", ""),
-                    user=user,
-                    top_k=input_state.get("top_k", 5),
-                )
-
-            elif agent_type == AgentType.DATA_PROCESS:
-                # 组装数据处理输入。
-                doc_input = {
-                    "source_type": input_state.get("source_type", "minio"),
-                    "source_path": input_state.get("source_path", ""),
-                    "source_content": None,
-                    "extracted_text": None,
-                    "markdown_content": None,
-                    "chunks": [],
-                    "embedding_ids": [],
-                    "graph_nodes": 0,
-                    "doc_id": None,
-                    "status": "pending",
-                    "error": None
-                }
-                result = await graph.ainvoke(doc_input)
-                return {
-                    "success": result.get("status") == "done",
-                    "doc_id": result.get("doc_id"),
-                    "chunks": result.get("chunks", []),
-                    "graph_nodes": result.get("graph_nodes", 0),
-                    "error": result.get("error")
-                }
-
-            elif agent_type == AgentType.REVIEW:
-                # 组装审核输入。
-                review_input = {
-                    "doc_id": input_state.get("doc_id", ""),
-                    "review_type": input_state.get("review_type", "quality"),
-                    "review_result": {},
-                    "rework_needed": False,
-                    "rework_count": 0,
-                    "max_rework": 3,
-                    "final_status": "pending"
-                }
-                result = await graph.ainvoke(review_input)
-                return {
-                    "success": result.get("final_status") == "approved",
-                    "doc_id": result.get("doc_id"),
-                    "score": result.get("review_result", {}).get("score", 0),
-                    "passed": result.get("final_status") == "approved",
-                    "issues": result.get("review_result", {}).get("issues", []),
-                    "final_status": result.get("final_status"),
-                    "rework_count": result.get("rework_count", 0)
-                }
-
-            elif agent_type == AgentType.ASSET_ORGANIZE:
-                # 组装资产整理输入。
-                asset_input = {
-                    "asset_ids": input_state.get("asset_ids", []),
-                    "clustering_result": {},
-                    "graph_updates": [],
-                    "summary_report": None,
-                    "publication_ready": False
-                }
-                result = await graph.ainvoke(asset_input)
-                return {
-                    "success": result.get("publication_ready", False),
-                    "clusters": result.get("clustering_result", {}).get("clusters", []),
-                    "summary_report": result.get("summary_report"),
-                    "graph_updates": result.get("graph_updates", [])
-                }
-
-            elif agent_type == AgentType.TRADE:
-                # 按交易动作选择对应工作流。
-                action = input_state.get("action", "listing")
-                if action == "listing":
-                    return await self._invoke_trade_listing(agent, input_state)
-                elif action == "purchase":
-                    return await self._invoke_trade_purchase(agent, input_state)
-                elif action == "yield":
-                    return await self._invoke_trade_yield(agent, input_state)
-                else:
-                    return {"error": f"Unknown trade action: {action}"}
-
-            elif agent_type == AgentType.CHAT:
-                # 通用聊天默认回退到 QA。
-                return await self.invoke_subagent(AgentType.QA, input_state)
-
-            else:
-                return {"error": f"Unhandled agent type: {agent_type}"}
-
+            return await handler(input_state)
         except Exception as e:
             logger.exception(f"Error invoking sub-agent {agent_type}: {e}")
             return {
@@ -213,6 +116,114 @@ class SubAgents:
                 "success": False,
                 "agent_type": agent_type.value
             }
+
+    # ========================================================================
+    # 子 Agent 调用处理器（注册表模式）
+    # ========================================================================
+
+    async def _invoke_file_query(self, input_state: SubAgentInput) -> Dict[str, Any]:
+        """文件查询 Agent 直接执行 run。"""
+        agent = self._agents.get(AgentType.FILE_QUERY)
+        if not agent:
+            return {"success": False, "error": "FileQueryAgent not available (space_path not set)"}
+        query = input_state.get("user_request", "")
+        return await agent.run(query)
+
+    async def _invoke_qa(self, input_state: SubAgentInput) -> Dict[str, Any]:
+        """QA Agent 走统一问答接口。"""
+        qa_agent = self._agents.get(AgentType.QA)
+        user = await _get_user(self._db, input_state.get("user_id"))
+        if not user:
+            return {"success": False, "error": "User not found for QA agent", "agent_type": "qa"}
+        return await qa_agent.run(
+            query=input_state.get("user_request", ""),
+            space_public_id=input_state.get("space_id", ""),
+            user=user,
+            top_k=input_state.get("top_k", 5),
+        )
+
+    async def _invoke_data_process(self, input_state: SubAgentInput) -> Dict[str, Any]:
+        """组装数据处理输入并执行 graph。"""
+        graph = self._graphs.get(AgentType.DATA_PROCESS)
+        doc_input = {
+            "source_type": input_state.get("source_type", "minio"),
+            "source_path": input_state.get("source_path", ""),
+            "source_content": None,
+            "extracted_text": None,
+            "markdown_content": None,
+            "chunks": [],
+            "embedding_ids": [],
+            "graph_nodes": 0,
+            "doc_id": None,
+            "status": "pending",
+            "error": None
+        }
+        result = await graph.ainvoke(doc_input)
+        return {
+            "success": result.get("status") == "done",
+            "doc_id": result.get("doc_id"),
+            "chunks": result.get("chunks", []),
+            "graph_nodes": result.get("graph_nodes", 0),
+            "error": result.get("error")
+        }
+
+    async def _invoke_review(self, input_state: SubAgentInput) -> Dict[str, Any]:
+        """组装审核输入并执行 graph。"""
+        graph = self._graphs.get(AgentType.REVIEW)
+        review_input = {
+            "doc_id": input_state.get("doc_id", ""),
+            "review_type": input_state.get("review_type", "quality"),
+            "review_result": {},
+            "rework_needed": False,
+            "rework_count": 0,
+            "max_rework": 3,
+            "final_status": "pending"
+        }
+        result = await graph.ainvoke(review_input)
+        return {
+            "success": result.get("final_status") == "approved",
+            "doc_id": result.get("doc_id"),
+            "score": result.get("review_result", {}).get("score", 0),
+            "passed": result.get("final_status") == "approved",
+            "issues": result.get("review_result", {}).get("issues", []),
+            "final_status": result.get("final_status"),
+            "rework_count": result.get("rework_count", 0)
+        }
+
+    async def _invoke_asset_organize(self, input_state: SubAgentInput) -> Dict[str, Any]:
+        """组装资产整理输入并执行 graph。"""
+        graph = self._graphs.get(AgentType.ASSET_ORGANIZE)
+        asset_input = {
+            "asset_ids": input_state.get("asset_ids", []),
+            "clustering_result": {},
+            "graph_updates": [],
+            "summary_report": None,
+            "publication_ready": False
+        }
+        result = await graph.ainvoke(asset_input)
+        return {
+            "success": result.get("publication_ready", False),
+            "clusters": result.get("clustering_result", {}).get("clusters", []),
+            "summary_report": result.get("summary_report"),
+            "graph_updates": result.get("graph_updates", [])
+        }
+
+    async def _invoke_trade(self, input_state: SubAgentInput) -> Dict[str, Any]:
+        """按交易动作选择对应工作流。"""
+        agent = self._agents.get(AgentType.TRADE)
+        action = input_state.get("action", "listing")
+        if action == "listing":
+            return await self._invoke_trade_listing(agent, input_state)
+        elif action == "purchase":
+            return await self._invoke_trade_purchase(agent, input_state)
+        elif action == "yield":
+            return await self._invoke_trade_yield(agent, input_state)
+        else:
+            return {"error": f"Unknown trade action: {action}"}
+
+    async def _invoke_chat(self, input_state: SubAgentInput) -> Dict[str, Any]:
+        """通用聊天默认回退到 QA。"""
+        return await self._invoke_qa(input_state)
 
     # 功能：执行交易上架流程。
     async def _invoke_trade_listing(
@@ -489,9 +500,16 @@ class MainAgent:
         state["task_result"] = subagent_result
         return state
 
-    # 功能：处理子 Agent 执行失败。
+    # 功能：处理子 Agent 执行失败，保留错误上下文供调试。
     async def _handle_error(self, state: MainAgentState) -> MainAgentState:
         state["task_status"] = TaskStatus.FAILED
+        error_msg = state.get("error", "Unknown error")
+        agent_type = state.get("active_subagent")
+        state["task_result"] = {
+            "success": False,
+            "error": error_msg,
+            "agent_type": agent_type.value if agent_type else "unknown",
+        }
         return state
 
     # 功能：保留统一的响应格式出口。
