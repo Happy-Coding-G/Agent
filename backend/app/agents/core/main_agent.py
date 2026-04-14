@@ -322,17 +322,17 @@ class MainAgent:
     async def _respond_step(self, state: MainAgentState) -> MainAgentState:
         """基于 tool_results 或直接回复生成最终中文回复。"""
         final_answer = state.get("final_answer")
-        if final_answer:
-            state["task_result"] = {"answer": final_answer}
-            state["task_status"] = TaskStatus.COMPLETED
-            return state
-
         tool_results = state.get("tool_results", [])
         user_request = state.get("user_request", "")
 
+        if final_answer:
+            state["task_result"] = {"answer": final_answer, "tool_results": tool_results}
+            state["task_status"] = TaskStatus.COMPLETED
+            return state
+
         if not tool_results:
             # Direct QA fallback
-            state["task_result"] = {"answer": "收到，请问有什么可以帮您的？"}
+            state["task_result"] = {"answer": "收到，请问有什么可以帮您的？", "tool_results": []}
             state["task_status"] = TaskStatus.COMPLETED
             return state
 
@@ -342,7 +342,7 @@ class MainAgent:
                 f"【{r['tool']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
                 for r in tool_results
             )
-            state["task_result"] = {"answer": summary}
+            state["task_result"] = {"answer": summary, "tool_results": tool_results}
             state["task_status"] = TaskStatus.COMPLETED
             return state
 
@@ -356,7 +356,7 @@ class MainAgent:
             )
             response = await self._llm_client.ainvoke(prompt)
             content = response.content if hasattr(response, "content") else str(response)
-            state["task_result"] = {"answer": content.strip()}
+            state["task_result"] = {"answer": content.strip(), "tool_results": tool_results}
             state["task_status"] = TaskStatus.COMPLETED
         except Exception as e:
             logger.warning(f"Respond generation failed: {e}")
@@ -364,7 +364,7 @@ class MainAgent:
                 f"【{r['tool']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
                 for r in tool_results
             )
-            state["task_result"] = {"answer": summary}
+            state["task_result"] = {"answer": summary, "tool_results": tool_results}
             state["task_status"] = TaskStatus.COMPLETED
 
         return state

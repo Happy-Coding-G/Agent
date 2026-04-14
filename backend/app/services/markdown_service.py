@@ -1,28 +1,21 @@
 from __future__ import annotations
 
-import asyncio
 import datetime
 import hashlib
-import time
 import uuid
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.ingest_pipeline import LangChainIngestPipeline
 from app.ai.markdown_utils import normalize_markdown
 from app.core.errors import ServiceError
-from app.db.models import DocChunkEmbeddings, DocChunks, Documents, IngestJobs, Users
-from app.repositories.space_repo import SpaceRepository
+from app.db.models import DocChunks, Documents, Users
 from app.services.base import SpaceAwareService, extract_title_from_text
 from app.utils.MinIO import minio_service
 
 
 class MarkdownDocumentService(SpaceAwareService):
-    """Markdown 文档服务 - 继承 SpaceAwareService"""
-
-    INGEST_WAIT_TIMEOUT_SECONDS = 30.0
-    INGEST_WAIT_POLL_SECONDS = 0.5
+    """Markdown 文档服务 - 继承 SpaceAwareService（已移除编辑保存功能，仅支持查看）"""
 
     def __init__(self, db: AsyncSession):
         super().__init__(db)
@@ -91,9 +84,11 @@ class MarkdownDocumentService(SpaceAwareService):
         title: str | None,
         user: Users,
     ):
+        """
+        保存 Markdown 文档（仅保留基础字段更新，向量重建已移除）
+        """
         space_db_id = await self._require_space(space_public_id, user)
         doc = await self._get_doc_in_space(space_db_id, doc_id)
-        await self._wait_for_ingest_idle(doc.doc_id)
 
         normalized = normalize_markdown(markdown_text)
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -104,26 +99,11 @@ class MarkdownDocumentService(SpaceAwareService):
         )
         doc.content_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         doc.updated_at = now
-        doc.status = "processing"
         doc.markdown_object_key = doc.markdown_object_key or self._default_markdown_key(
             doc
         )
 
         minio_service.upload_text(doc.markdown_object_key, normalized)
-        await self.db.commit()
-
-        try:
-            await self._rebuild_vectors_for_document(doc)
-        except Exception as exc:
-            await self.db.rollback()
-            failed_doc = await self._get_doc_in_space(space_db_id, doc_id)
-            failed_doc.status = "failed"
-            failed_doc.updated_at = datetime.datetime.now(datetime.timezone.utc)
-            await self.db.commit()
-            raise ServiceError(500, f"Failed to rebuild vectors: {exc}") from exc
-
-        doc.status = "completed"
-        doc.updated_at = datetime.datetime.now(datetime.timezone.utc)
         await self.db.commit()
 
         return await self.get_document(space_public_id, doc_id, user)
@@ -146,45 +126,3 @@ class MarkdownDocumentService(SpaceAwareService):
         finally:
             obj.close()
             obj.release_conn()
-
-    async def _rebuild_vectors_for_document(self, doc: Documents) -> None:
-        chunk_id_rows = await self.db.execute(
-            select(DocChunks.chunk_id).where(DocChunks.doc_id == doc.doc_id)
-        )
-        chunk_ids = chunk_id_rows.scalars().all()
-
-        if chunk_ids:
-            await self.db.execute(
-                delete(DocChunkEmbeddings).where(
-                    DocChunkEmbeddings.chunk_id.in_(chunk_ids)
-                )
-            )
-        await self.db.execute(delete(DocChunks).where(DocChunks.doc_id == doc.doc_id))
-        await self.db.commit()
-
-        pipeline = LangChainIngestPipeline(self.db)
-        chunk_docs = await pipeline._chunk_markdown(doc.markdown_text or "")
-        if not chunk_docs:
-            return
-        await pipeline._store_chunks_and_embeddings(doc, chunk_docs)
-
-    async def _wait_for_ingest_idle(self, doc_uuid: uuid.UUID) -> None:
-        deadline = time.monotonic() + self.INGEST_WAIT_TIMEOUT_SECONDS
-        while True:
-            active = await self._has_active_ingest_job(doc_uuid)
-            if not active:
-                return
-            if time.monotonic() >= deadline:
-                raise ServiceError(
-                    409, "Document is still ingesting, please retry shortly"
-                )
-            await asyncio.sleep(self.INGEST_WAIT_POLL_SECONDS)
-
-    async def _has_active_ingest_job(self, doc_uuid: uuid.UUID) -> bool:
-        q = await self.db.execute(
-            select(IngestJobs.ingest_id).where(
-                IngestJobs.doc_id == doc_uuid,
-                IngestJobs.status.in_(("queued", "running")),
-            )
-        )
-        return q.scalars().first() is not None
