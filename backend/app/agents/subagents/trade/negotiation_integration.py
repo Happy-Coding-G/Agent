@@ -34,7 +34,6 @@ from app.agents.subagents.trade.negotiation.strategy.concession import (
     ConcessionCurveType,
 )
 from app.services.pricing.pricing_service import UnifiedPricingService
-from app.services.pricing.enhanced_pricing_skill import EnhancedPriceSuggestion
 
 logger = logging.getLogger(__name__)
 
