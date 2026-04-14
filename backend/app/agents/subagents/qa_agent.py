@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 from typing import Any, Optional, AsyncGenerator, Dict, List
 
 from langgraph.graph import END, StateGraph
@@ -53,10 +54,17 @@ class QAAgent(SpaceAwareService):
 
     def __init__(self, db: AsyncSession):
         super().__init__(db)
+        self._neo4j_driver = None
+        self._neo4j_lock = threading.Lock()
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph:
-        """Build the LangGraph for QA pipeline."""
+        """Build the LangGraph for QA pipeline.
+
+        hybrid_merge 后通过条件边检查：若检索结果为空则直接跳到
+        format_sources（跳过 generate_answer 中昂贵的 LLM 调用），
+        generate_answer_node 内部已有空结果兜底逻辑会设置默认回答。
+        """
         builder = StateGraph(QAState)
 
         builder.add_node("classify_query", RunnableLambda(self._classify_query_node))
@@ -64,18 +72,38 @@ class QAAgent(SpaceAwareService):
         builder.add_node("graph_search", RunnableLambda(self._graph_search_node))
         builder.add_node("hybrid_merge", RunnableLambda(self._hybrid_merge_node))
         builder.add_node("generate_answer", RunnableLambda(self._generate_answer_node))
+        builder.add_node("no_results_answer", RunnableLambda(self._no_results_answer_node))
         builder.add_node("format_sources", RunnableLambda(self._format_sources_node))
 
         builder.add_edge("classify_query", "vector_search")
         builder.add_edge("classify_query", "graph_search")
         builder.add_edge("vector_search", "hybrid_merge")
         builder.add_edge("graph_search", "hybrid_merge")
-        builder.add_edge("hybrid_merge", "generate_answer")
+
+        # 条件边：检索结果非空时调用 LLM，为空时跳过 LLM 调用。
+        builder.add_conditional_edges(
+            "hybrid_merge",
+            self._has_retrieval_results,
+            {"has_results": "generate_answer", "empty": "no_results_answer"}
+        )
+
         builder.add_edge("generate_answer", "format_sources")
+        builder.add_edge("no_results_answer", "format_sources")
         builder.add_edge("format_sources", END)
 
         builder.set_entry_point("classify_query")
         return builder.compile()
+
+    @staticmethod
+    def _has_retrieval_results(state: QAState) -> str:
+        """检查 hybrid_merge 是否产生了结果。"""
+        return "has_results" if state.get("hybrid_results") else "empty"
+
+    @staticmethod
+    async def _no_results_answer_node(state: QAState) -> QAState:
+        """检索结果为空时直接生成默认回答，跳过 LLM 调用。"""
+        state["answer"] = "抱歉，我没有找到与您问题相关的文档内容。请尝试调整您的问题或先上传相关文档。"
+        return state
 
     async def run(
         self,
@@ -471,15 +499,17 @@ class QAAgent(SpaceAwareService):
         try:
             from neo4j import GraphDatabase
 
-            driver = GraphDatabase.driver(
-                neo4j_uri,
-                auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
-            )
+            with self._neo4j_lock:
+                if self._neo4j_driver is None:
+                    self._neo4j_driver = GraphDatabase.driver(
+                        neo4j_uri,
+                        auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+                    )
 
             results = []
             keywords = query.lower().split()[:3]
 
-            with driver.session(database=settings.NEO4J_DATABASE) as session:
+            with self._neo4j_driver.session(database=settings.NEO4J_DATABASE) as session:
                 for keyword in keywords:
                     query_text = """
                     MATCH (e:Entity)
@@ -503,7 +533,6 @@ class QAAgent(SpaceAwareService):
                             "score": 0.8,
                         })
 
-            driver.close()
             return results[:top_k]
 
         except Exception as e:

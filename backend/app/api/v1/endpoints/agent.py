@@ -28,8 +28,7 @@ from app.schemas.schemas import (
     ReviewResponse,
 )
 from app.services.base import get_llm_client
-from app.agents.core import MainAgent
-from app.agents.state import AgentType
+from app.agents.core import MainAgent, AgentType
 from app.core.config import settings
 from app.db.models import AgentTasks, AssetClusters, AssetClusterMembership, ReviewLogs
 

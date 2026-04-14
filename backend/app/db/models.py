@@ -1614,7 +1614,6 @@ Users.received_messages = relationship(
     foreign_keys=[AgentMessageQueue.to_agent_user_id],
     back_populates="to_user",
 )
-Users.agent_configs = relationship("UserAgentConfig", back_populates="user")
 Users.token_usages = relationship("TokenUsage", back_populates="user", order_by="TokenUsage.created_at.desc()")
 
 # Escrow relationships
@@ -2555,7 +2554,7 @@ class TokenUsage(Base):
     error_message = Column(Text, nullable=True)     # 错误信息
 
     # 扩展信息 (JSON格式，存储额外上下文)
-    metadata = Column(JSONB, default=dict)
+    extra_metadata = Column(JSONB, server_default=text("'{}'"))
 
     # 时间戳
     created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
@@ -2583,6 +2582,8 @@ class TokenUsage(Base):
             "session_id": self.session_id,
             "latency_ms": self.latency_ms,
             "status": self.status,
+            "error_message": self.error_message,
+            "extra_metadata": self.extra_metadata,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

@@ -29,7 +29,6 @@ from .trade import (
     TradeAgentService,
     TradeNegotiationService,
     TradeService,
-    UnifiedTradeService,
 )
 
 __all__ = [
@@ -49,5 +48,4 @@ __all__ = [
     "TradeService",
     "TradeAgentService",
     "TradeNegotiationService",
-    "UnifiedTradeService",
 ]
