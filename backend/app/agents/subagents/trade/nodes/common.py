@@ -10,6 +10,16 @@ from app.agents.subagents.trade.state import TradeState
 
 logger = logging.getLogger(__name__)
 
+# Fallback pricing heuristic constants (used when PricingSkill is unavailable)
+_PRICE_BASE = 20.0           # Base price in credits
+_PRICE_PER_NODE = 1.5        # Credits per knowledge graph node
+_PRICE_PER_EDGE = 1.2        # Credits per knowledge graph edge
+_PRICE_LENGTH_DIVISOR = 180  # Content chars per credit of length factor
+_PRICE_LENGTH_CAP = 120.0    # Max length factor contribution
+_PRICE_MIN = 5.0             # Floor price
+_PRICE_MAX = 500.0           # Ceiling price
+_PRICE_DEFAULT = 50.0        # Default when no asset info available
+
 
 async def validate_input(self, state: TradeState) -> TradeState:
     """验证输入参数"""
@@ -90,7 +100,7 @@ async def calculate_price(self, state: TradeState) -> TradeState:
         asset_id = state.get("asset_id")
 
         if not asset_info or not asset_id:
-            state["calculated_price"] = 50.0
+            state["calculated_price"] = _PRICE_DEFAULT
             return state
 
         try:
@@ -106,18 +116,15 @@ async def calculate_price(self, state: TradeState) -> TradeState:
             graph = asset_info.get("graph_snapshot", {})
             node_count = graph.get("node_count", 0)
             edge_count = graph.get("edge_count", 0)
-            # Fallback heuristic: base price (20 credits) + content length
-            # factor (up to 120 credits for long documents) + graph complexity
-            # bonus (1.5 per node, 1.2 per edge). Clamped to [5, 500].
-            length_factor = min(len(content) / 180.0, 120.0)
-            price = 20.0 + length_factor + node_count * 1.5 + edge_count * 1.2
-            state["calculated_price"] = max(5.0, min(500.0, price))
+            length_factor = min(len(content) / _PRICE_LENGTH_DIVISOR, _PRICE_LENGTH_CAP)
+            price = _PRICE_BASE + length_factor + node_count * _PRICE_PER_NODE + edge_count * _PRICE_PER_EDGE
+            state["calculated_price"] = max(_PRICE_MIN, min(_PRICE_MAX, price))
 
         return state
 
     except Exception as e:
         logger.error(f"Price calculation failed: {e}")
-        state["calculated_price"] = 50.0
+        state["calculated_price"] = _PRICE_DEFAULT
         return state
 
 
