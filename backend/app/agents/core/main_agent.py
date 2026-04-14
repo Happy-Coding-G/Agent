@@ -73,7 +73,9 @@ class SubAgents:
             # TradeAgent 现在使用 LangGraph，与其他 Agent 统一架构
             self._graphs[AgentType.TRADE] = self._agents[AgentType.TRADE].graph
 
-            # 注册各 AgentType 的调用处理器（注册表模式，新增 Agent 只需在此添加一行）。
+            # 注册各 AgentType 的调用处理器（注册表模式）。
+            # 新增 Agent 需要：1) import, 2) 实例化并加入 _agents/_graphs,
+            # 3) 编写 _invoke_xxx handler, 4) 在此注册。
             self._handlers = {
                 AgentType.FILE_QUERY: self._invoke_file_query,
                 AgentType.QA: self._invoke_qa,

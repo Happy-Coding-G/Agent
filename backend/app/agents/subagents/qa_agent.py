@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 from typing import Any, Optional, AsyncGenerator, Dict, List
 
 from langgraph.graph import END, StateGraph
@@ -54,6 +55,7 @@ class QAAgent(SpaceAwareService):
     def __init__(self, db: AsyncSession):
         super().__init__(db)
         self._neo4j_driver = None
+        self._neo4j_lock = threading.Lock()
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph:
@@ -497,11 +499,12 @@ class QAAgent(SpaceAwareService):
         try:
             from neo4j import GraphDatabase
 
-            if self._neo4j_driver is None:
-                self._neo4j_driver = GraphDatabase.driver(
-                    neo4j_uri,
-                    auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
-                )
+            with self._neo4j_lock:
+                if self._neo4j_driver is None:
+                    self._neo4j_driver = GraphDatabase.driver(
+                        neo4j_uri,
+                        auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+                    )
 
             results = []
             keywords = query.lower().split()[:3]
