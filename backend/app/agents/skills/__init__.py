@@ -1,26 +1,39 @@
-"""
-Agent Skills - 可复用的Agent能力模块
+"""Agent-layer skill package.
 
-Skills是轻量级、无状态的工具函数集合，可被多个SubAgent复用。
-与SubAgent相比，Skills:
-- 无状态（不维护会话状态）
-- 执行时间短（< 5秒）
-- 无副作用（只读或纯计算）
-- 可被多个Agent复用
+SKILL.md 是工作流文档的单一真相源：
+- parser 负责读取和解析 markdown
+- executor 负责把文档中的 executor 路径解析为可调用对象
+- registry 为 MainAgent 提供 schema 暴露与执行入口
 """
 
-# 兼容性导入 - Skills已迁移到 app.services.skills
-# 请使用: from app.services.skills import ...
-from app.services.skills.pricing_skill import PricingSkill
-from app.services.skills.lineage_skill import DataLineageSkill
-from app.services.skills.market_analysis_skill import MarketAnalysisSkill
-from app.services.skills.privacy_skill import PrivacyComputationSkill
-from app.services.skills.audit_skill import AuditSkill
+from importlib import import_module
 
 __all__ = [
-    "PricingSkill",
-    "DataLineageSkill",
-    "MarketAnalysisSkill",
-    "PrivacyComputationSkill",
-    "AuditSkill",
+    "SkillMDDocument",
+    "SkillMDParser",
+    "SkillRegistry",
+    "execute_skill_md",
+    "get_executor_method",
+    "resolve_executor",
 ]
+
+
+def __getattr__(name: str):
+    lazy_map = {
+        "SkillRegistry": "app.agents.skills.registry",
+        "SkillMDDocument": "app.agents.skills.parser",
+        "SkillMDParser": "app.agents.skills.parser",
+        "execute_skill_md": "app.agents.skills.executor",
+        "get_executor_method": "app.agents.skills.executor",
+        "resolve_executor": "app.agents.skills.executor",
+    }
+    if name in lazy_map:
+        module = import_module(lazy_map[name])
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

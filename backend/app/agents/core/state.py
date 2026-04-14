@@ -40,6 +40,13 @@ class MainAgentState(TypedDict, total=False):
     tool_calls: List[Dict[str, Any]]  # LLM 选择的工具调用序列
     tool_results: List[Dict[str, Any]]  # 工具执行结果
     active_tool: Optional[Dict[str, Any]]  # 当前待执行的工具
+    skill_calls: List[Dict[str, Any]]  # LLM 选择的 skill 调用序列
+    skill_results: List[Dict[str, Any]]  # skill 执行结果
+    active_skill: Optional[Dict[str, Any]]  # 当前待执行的 skill
+    subagent_calls: List[Dict[str, Any]]  # LLM 选择的 subagent 调用序列
+    subagent_results: List[Dict[str, Any]]  # subagent 执行结果
+    active_subagent_call: Optional[Dict[str, Any]]  # 当前待执行的 subagent
+    decision_mode: Optional[str]  # direct/tool/skill/subagent
     final_answer: Optional[str]  # 最终自然语言回复
 
 

@@ -1,5 +1,7 @@
-"""
-AgentToolRegistry - 统一注册、发现、获取 Agent 可调用的 StructuredTool。
+"""Agent tool registry.
+
+Tools 是显式、稳定、适合直接调用的操作接口。
+它们与 skills、subagents 平行存在，不承担复杂任务编排语义。
 """
 from __future__ import annotations
 
@@ -46,7 +48,6 @@ class AgentToolRegistry:
             graph_tools,
             asset_tools,
             qa_tools,
-            data_process_tools,
             review_tools,
             trade_tools,
             memory_tools,
@@ -61,7 +62,6 @@ class AgentToolRegistry:
             graph_tools.build_tools,
             asset_tools.build_tools,
             qa_tools.build_tools,
-            data_process_tools.build_tools,
             review_tools.build_tools,
             trade_tools.build_tools,
             memory_tools.build_tools,

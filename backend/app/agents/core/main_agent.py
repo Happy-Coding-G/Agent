@@ -1,7 +1,10 @@
 """主 Agent 编排入口。
 
-负责意图识别、工具调用路由和统一聊天封装。
-Agent-First 架构：MainAgent 升级为 Tool-Aware ReAct Agent。
+MainAgent 负责做 capability routing：
+- direct answer
+- tool
+- skill
+- subagent
 """
 import json
 import logging
@@ -13,13 +16,13 @@ from langgraph.checkpoint.memory import MemorySaver
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .state import MainAgentState, AgentType, TaskStatus
-from .prompts import TOOL_CALLING_SYSTEM_PROMPT
+from .prompts import CAPABILITY_ROUTING_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# SubAgents (Legacy container - kept for backward compatibility)
+# SubAgents (legacy helper, currently retained for QA streaming compatibility)
 # =============================================================================
 class SubAgents:
     def __init__(self, db: AsyncSession, llm_client=None, space_path: Optional[str] = None):
@@ -36,7 +39,6 @@ class SubAgents:
         try:
             from app.agents.subagents.file_query_agent import FileQueryAgent
             from app.agents.subagents.qa_agent import QAAgent
-            from app.agents.subagents.data_process_agent import DataProcessAgent
             from app.agents.subagents.review_agent import ReviewAgent
             from app.agents.subagents.asset_organize_agent import AssetOrganizeAgent
             from app.agents.subagents.trade.agent import TradeAgent
@@ -47,9 +49,6 @@ class SubAgents:
 
             self._agents[AgentType.QA] = QAAgent(self._db)
             self._graphs[AgentType.QA] = self._agents[AgentType.QA].graph
-
-            self._agents[AgentType.DATA_PROCESS] = DataProcessAgent(self._db)
-            self._graphs[AgentType.DATA_PROCESS] = self._agents[AgentType.DATA_PROCESS].graph
 
             self._agents[AgentType.REVIEW] = ReviewAgent(self._db)
             self._graphs[AgentType.REVIEW] = self._agents[AgentType.REVIEW].graph
@@ -107,11 +106,26 @@ class MainAgent:
             space_path=self._space_path,
         )
 
+    def _get_skill_registry(self) -> "SkillRegistry":
+        from app.agents.skills.registry import SkillRegistry
+        return SkillRegistry(db=self._db)
+
+    def _get_subagent_registry(self, user) -> "SubAgentRegistry":
+        from app.agents.subagents.registry import SubAgentRegistry
+        return SubAgentRegistry(
+            db=self._db,
+            user=user,
+            llm_client=self._llm_client,
+            space_path=self._space_path,
+        )
+
     def _build_graph(self) -> StateGraph:
         workflow = StateGraph(MainAgentState)
 
         workflow.add_node("plan", self._plan_step)
         workflow.add_node("execute_tool", self._execute_tool)
+        workflow.add_node("execute_skill", self._execute_skill)
+        workflow.add_node("execute_subagent", self._execute_subagent)
         workflow.add_node("respond", self._respond_step)
         workflow.add_node("handle_error", self._handle_error)
 
@@ -120,13 +134,31 @@ class MainAgent:
         workflow.add_conditional_edges(
             "plan",
             self._plan_router,
-            {"direct": "respond", "tool": "execute_tool", "error": "handle_error"}
+            {
+                "direct": "respond",
+                "tool": "execute_tool",
+                "skill": "execute_skill",
+                "subagent": "execute_subagent",
+                "error": "handle_error",
+            }
         )
 
         workflow.add_conditional_edges(
             "execute_tool",
             self._tool_router,
             {"continue": "plan", "error": "handle_error", "done": "respond"}
+        )
+
+        workflow.add_conditional_edges(
+            "execute_skill",
+            self._post_execution_router,
+            {"respond": "respond", "error": "handle_error"}
+        )
+
+        workflow.add_conditional_edges(
+            "execute_subagent",
+            self._post_execution_router,
+            {"respond": "respond", "error": "handle_error"}
         )
 
         workflow.add_edge("respond", END)
@@ -138,9 +170,12 @@ class MainAgent:
     def _plan_router(self, state: MainAgentState) -> str:
         if state.get("error"):
             return "error"
-        active_tool = state.get("active_tool")
-        if active_tool:
+        if state.get("active_tool"):
             return "tool"
+        if state.get("active_skill"):
+            return "skill"
+        if state.get("active_subagent_call"):
+            return "subagent"
         return "direct"
 
     def _tool_router(self, state: MainAgentState) -> str:
@@ -153,8 +188,13 @@ class MainAgent:
             return "continue"
         return "done"
 
+    def _post_execution_router(self, state: MainAgentState) -> str:
+        if state.get("error"):
+            return "error"
+        return "respond"
+
     async def _plan_step(self, state: MainAgentState) -> MainAgentState:
-        """读取工具列表，构造 system prompt，调用 LLM 决定直接回复还是选择工具。"""
+        """读取 capability 列表，决定 direct/tool/skill/subagent。"""
         user_request = state.get("user_request", "")
         space_id = state.get("space_id")
         user_id = state.get("user_id")
@@ -173,19 +213,24 @@ class MainAgent:
 
         registry = self._get_tool_registry(user, space_id)
         tool_schemas = registry.get_tool_schemas()
+        skill_registry = self._get_skill_registry()
+        skill_schemas = skill_registry.get_skill_schemas()
+        subagent_registry = self._get_subagent_registry(user)
+        subagent_schemas = subagent_registry.get_subagent_schemas()
 
         # Try to detect if this is a QA request for streaming passthrough
         intent = self._simple_intent_detection(user_request)
         state["intent"] = intent
 
         if not self._llm_client:
-            # Fallback: use simple intent detection to pick tool
             state = await self._fallback_plan(state, registry, intent)
             return state
 
         try:
-            system_prompt = TOOL_CALLING_SYSTEM_PROMPT.format(
+            system_prompt = CAPABILITY_ROUTING_SYSTEM_PROMPT.format(
                 tool_schemas=json.dumps(tool_schemas, ensure_ascii=False, indent=2),
+                skill_schemas=json.dumps(skill_schemas, ensure_ascii=False, indent=2),
+                subagent_schemas=json.dumps(subagent_schemas, ensure_ascii=False, indent=2),
                 user_id=user_id,
                 space_id=space_id or "none",
             )
@@ -196,15 +241,41 @@ class MainAgent:
             response = await self._llm_client.ainvoke(messages)
             content = response.content if hasattr(response, "content") else str(response)
 
-            # Try to parse tool call
-            tool_call = self._extract_tool_call(content)
-            if tool_call:
-                state["active_tool"] = tool_call
-                tc = state.get("tool_calls", [])
-                tc.append(tool_call)
-                state["tool_calls"] = tc
+            decision = self._extract_routing_decision(content)
+            if decision:
+                mode = decision.get("mode")
+                state["decision_mode"] = mode
+
+                if mode == "tool":
+                    tool_call = {
+                        "name": decision.get("name"),
+                        "arguments": decision.get("arguments", {}),
+                    }
+                    state["active_tool"] = tool_call
+                    tc = state.get("tool_calls", [])
+                    tc.append(tool_call)
+                    state["tool_calls"] = tc
+                elif mode == "skill":
+                    skill_call = {
+                        "name": decision.get("name"),
+                        "arguments": decision.get("arguments", {}),
+                    }
+                    state["active_skill"] = skill_call
+                    sc = state.get("skill_calls", [])
+                    sc.append(skill_call)
+                    state["skill_calls"] = sc
+                elif mode == "subagent":
+                    subagent_call = {
+                        "name": decision.get("name"),
+                        "arguments": decision.get("arguments", {}),
+                    }
+                    state["active_subagent_call"] = subagent_call
+                    sac = state.get("subagent_calls", [])
+                    sac.append(subagent_call)
+                    state["subagent_calls"] = sac
+                else:
+                    state["final_answer"] = decision.get("answer") or content.strip()
             else:
-                state["active_tool"] = None
                 state["final_answer"] = content.strip()
         except Exception as e:
             logger.warning(f"LLM plan failed, using fallback: {e}")
@@ -213,7 +284,7 @@ class MainAgent:
         return state
 
     async def _fallback_plan(self, state: MainAgentState, registry, intent: AgentType) -> MainAgentState:
-        """当 LLM 不可用时，基于简单意图映射到工具。"""
+        """当 LLM 不可用时，基于简单意图进行 capability fallback。"""
         user_request = state.get("user_request", "")
         space_id = state.get("space_id")
 
@@ -223,9 +294,16 @@ class MainAgent:
             state["final_answer"] = None
             return state
 
+        if intent == AgentType.DATA_PROCESS:
+            state["active_tool"] = None
+            state["final_answer"] = (
+                "文件摄入流程已收敛为外部上传 API。"
+                "请先调用上传初始化接口、直传对象存储，再调用上传完成接口触发后续摄入。"
+            )
+            return state
+
         tool_map = {
             AgentType.FILE_QUERY: ("file_search", {"query": user_request}),
-            AgentType.DATA_PROCESS: ("process_document", {"source_type": "text", "source_path": user_request, "space_id": space_id or ""}),
             AgentType.REVIEW: ("review_document", {"doc_id": "", "review_type": "standard"}),
             AgentType.ASSET_ORGANIZE: ("asset_organize", {"asset_ids": []}),
             AgentType.TRADE: ("trade_goal", {"intent": "yield"}),
@@ -243,10 +321,9 @@ class MainAgent:
 
         return state
 
-    def _extract_tool_call(self, content: str) -> Optional[Dict[str, Any]]:
-        """从 LLM 回复中提取 tool_call JSON。"""
+    def _extract_routing_decision(self, content: str) -> Optional[Dict[str, Any]]:
+        """从 LLM 回复中提取 capability routing decision。"""
         try:
-            # Look for JSON block
             if "```json" in content:
                 json_block = content.split("```json")[1].split("```")[0].strip()
             elif "```" in content:
@@ -255,20 +332,45 @@ class MainAgent:
                 json_block = content.strip()
 
             data = json.loads(json_block)
+
+            if "decision" in data:
+                decision = data["decision"]
+                if not isinstance(decision, dict):
+                    return None
+                mode = decision.get("mode")
+                if mode == "direct":
+                    return {"mode": "direct", "answer": decision.get("answer", "")}
+                if mode in {"tool", "skill", "subagent"}:
+                    return {
+                        "mode": mode,
+                        "name": decision.get("name"),
+                        "arguments": decision.get("arguments", {}),
+                    }
+
             if "tool_call" in data:
-                return data["tool_call"]
+                return {
+                    "mode": "tool",
+                    "name": data["tool_call"].get("name"),
+                    "arguments": data["tool_call"].get("arguments", {}),
+                }
             if "name" in data and "arguments" in data:
-                return data
+                return {
+                    "mode": "tool",
+                    "name": data.get("name"),
+                    "arguments": data.get("arguments", {}),
+                }
         except Exception:
             pass
         return None
 
     def _simple_intent_detection(self, text: str) -> AgentType:
         text_lower = text.lower()
-        if any(kw in text_lower for kw in ["查看", "文件", "查找", "搜索", "目录"]):
-            return AgentType.FILE_QUERY
-        elif any(kw in text_lower for kw in ["导入", "处理", "上传", "摄取", "文档"]):
+        ingest_keywords = ["上传", "摄入", "摄取", "导入", "处理文档", "解析文档", "建立索引"]
+
+        if any(kw in text_lower for kw in ingest_keywords):
             return AgentType.DATA_PROCESS
+        elif any(kw in text_lower for kw in ["查看", "查找", "搜索", "目录"]) or "文件" in text_lower:
+            return AgentType.FILE_QUERY
         elif any(kw in text_lower for kw in ["审查", "检查", "审核", "质量"]):
             return AgentType.REVIEW
         elif any(kw in text_lower for kw in ["问答", "回答", "问题", "查询", "检索"]):
@@ -319,52 +421,130 @@ class MainAgent:
 
         return state
 
+    async def _execute_skill(self, state: MainAgentState) -> MainAgentState:
+        active_skill = state.get("active_skill")
+        if not active_skill:
+            return state
+
+        try:
+            registry = self._get_skill_registry()
+            result = await registry.execute(
+                active_skill.get("name"),
+                active_skill.get("arguments", {}),
+            )
+            sr = state.get("skill_results", [])
+            sr.append(result)
+            state["skill_results"] = sr
+            state["active_skill"] = None
+        except Exception as e:
+            logger.exception(f"Skill execution failed: {e}")
+            state["error"] = str(e)
+
+        return state
+
+    async def _execute_subagent(self, state: MainAgentState) -> MainAgentState:
+        active_subagent = state.get("active_subagent_call")
+        if not active_subagent:
+            return state
+
+        user_id = state.get("user_id")
+        user = None
+        if user_id:
+            from sqlalchemy import select
+            from app.db.models import Users
+
+            result = await self._db.execute(select(Users).where(Users.id == user_id))
+            user = result.scalar_one_or_none()
+
+        if not user:
+            state["error"] = "User not found"
+            return state
+
+        try:
+            registry = self._get_subagent_registry(user)
+            result = await registry.execute(
+                active_subagent.get("name"),
+                active_subagent.get("arguments", {}),
+            )
+            sr = state.get("subagent_results", [])
+            sr.append(result)
+            state["subagent_results"] = sr
+            state["active_subagent_call"] = None
+        except Exception as e:
+            logger.exception(f"Subagent execution failed: {e}")
+            state["error"] = str(e)
+
+        return state
+
     async def _respond_step(self, state: MainAgentState) -> MainAgentState:
-        """基于 tool_results 或直接回复生成最终中文回复。"""
+        """基于 capability 执行结果或直接回复生成最终中文回复。"""
         final_answer = state.get("final_answer")
         tool_results = state.get("tool_results", [])
+        skill_results = state.get("skill_results", [])
+        subagent_results = state.get("subagent_results", [])
         user_request = state.get("user_request", "")
+        capability_results = {
+            "tool_results": tool_results,
+            "skill_results": skill_results,
+            "subagent_results": subagent_results,
+        }
 
         if final_answer:
-            state["task_result"] = {"answer": final_answer, "tool_results": tool_results}
+            state["task_result"] = {"answer": final_answer, **capability_results}
             state["task_status"] = TaskStatus.COMPLETED
             return state
 
-        if not tool_results:
-            # Direct QA fallback
-            state["task_result"] = {"answer": "收到，请问有什么可以帮您的？", "tool_results": []}
+        if not any([tool_results, skill_results, subagent_results]):
+            state["task_result"] = {"answer": "收到，请问有什么可以帮您的？", **capability_results}
             state["task_status"] = TaskStatus.COMPLETED
             return state
 
         if not self._llm_client:
-            # Simple formatting without LLM
-            summary = "\n\n".join(
-                f"【{r['tool']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
+            summary_parts = []
+            summary_parts.extend(
+                f"【tool:{r['tool']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
                 for r in tool_results
             )
-            state["task_result"] = {"answer": summary, "tool_results": tool_results}
+            summary_parts.extend(
+                f"【skill:{r['skill']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
+                for r in skill_results
+            )
+            summary_parts.extend(
+                f"【subagent:{r['subagent']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
+                for r in subagent_results
+            )
+            state["task_result"] = {"answer": "\n\n".join(summary_parts), **capability_results}
             state["task_status"] = TaskStatus.COMPLETED
             return state
 
         try:
             prompt = (
-                "你是一个 helpful 的 AI 助手。根据用户的请求和工具执行结果，生成一段自然、简洁的中文回复。\n\n"
+                "你是一个 helpful 的 AI 助手。根据用户的请求和能力执行结果，生成一段自然、简洁的中文回复。\n\n"
                 f"用户请求：{user_request}\n\n"
-                "工具执行结果：\n"
-                f"{json.dumps(tool_results, ensure_ascii=False, indent=2)}\n\n"
-                "请直接回复用户，不要暴露内部工具名称和 JSON 结构："
+                "能力执行结果：\n"
+                f"{json.dumps(capability_results, ensure_ascii=False, indent=2)}\n\n"
+                "请直接回复用户，不要暴露内部 capability 名称和 JSON 结构："
             )
             response = await self._llm_client.ainvoke(prompt)
             content = response.content if hasattr(response, "content") else str(response)
-            state["task_result"] = {"answer": content.strip(), "tool_results": tool_results}
+            state["task_result"] = {"answer": content.strip(), **capability_results}
             state["task_status"] = TaskStatus.COMPLETED
         except Exception as e:
             logger.warning(f"Respond generation failed: {e}")
-            summary = "\n\n".join(
-                f"【{r['tool']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
+            summary_parts = []
+            summary_parts.extend(
+                f"【tool:{r['tool']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
                 for r in tool_results
             )
-            state["task_result"] = {"answer": summary, "tool_results": tool_results}
+            summary_parts.extend(
+                f"【skill:{r['skill']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
+                for r in skill_results
+            )
+            summary_parts.extend(
+                f"【subagent:{r['subagent']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
+                for r in subagent_results
+            )
+            state["task_result"] = {"answer": "\n\n".join(summary_parts), **capability_results}
             state["task_status"] = TaskStatus.COMPLETED
 
         return state
@@ -409,6 +589,13 @@ class MainAgent:
             "tool_calls": [],
             "tool_results": [],
             "active_tool": None,
+            "skill_calls": [],
+            "skill_results": [],
+            "active_skill": None,
+            "subagent_calls": [],
+            "subagent_results": [],
+            "active_subagent_call": None,
+            "decision_mode": None,
             "final_answer": None,
         }
 

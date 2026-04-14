@@ -1,5 +1,7 @@
-"""
-DataProcessAgent - LangGraph-based data processing agent using ingest pipeline.
+"""Deprecated data ingest subagent.
+
+文件摄入已收敛为外部上传 API 驱动流程。
+该类仅在迁移期保留，不再属于 MainAgent 的运行时能力边界。
 """
 from __future__ import annotations
 

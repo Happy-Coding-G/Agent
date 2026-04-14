@@ -6,6 +6,7 @@ TradeAgent - LangGraph-based Trading Agent with User-Level Configuration
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any, Dict, Optional, List
 from datetime import datetime, timezone
 

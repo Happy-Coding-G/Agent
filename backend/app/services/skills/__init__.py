@@ -1,12 +1,8 @@
-"""
-Agent Skills - 可复用的Agent能力模块
+"""Service-layer skill implementations.
 
-Skills是轻量级、无状态的工具函数集合，可被多个SubAgent复用。
-与SubAgent相比，Skills:
-- 无状态（不维护会话状态）
-- 执行时间短（< 5秒）
-- 无副作用（只读或纯计算）
-- 可被多个Agent复用
+这里存放的是 skill 的代码实现类。
+Agent 层关于 skill 的 workflow、适用场景、输入输出契约，
+由 app.agents.skills.registry 负责统一定义。
 """
 
 from app.services.skills.pricing_skill import PricingSkill
