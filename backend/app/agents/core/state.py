@@ -36,6 +36,11 @@ class MainAgentState(TypedDict, total=False):
     context: Optional[Dict[str, Any]]  # Additional context from request
     error: Optional[str]  # Error message if any
     retry_count: int  # Number of retries attempted
+    # Agent-First Tool Calling fields
+    tool_calls: List[Dict[str, Any]]  # LLM 选择的工具调用序列
+    tool_results: List[Dict[str, Any]]  # 工具执行结果
+    active_tool: Optional[Dict[str, Any]]  # 当前待执行的工具
+    final_answer: Optional[str]  # 最终自然语言回复
 
 
 class SubAgentInput(TypedDict, total=False):

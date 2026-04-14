@@ -17,10 +17,12 @@ from app.agents.core import (
     AssetOrganizeState,
     TradeState,
 )
+from app.agents.tools import AgentToolRegistry
 
 __all__ = [
     "MainAgent",
     "SubAgents",
+    "AgentToolRegistry",
     "MainAgentState",
     "TaskStatus",
     "AgentType",
