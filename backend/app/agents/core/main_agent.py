@@ -8,11 +8,21 @@ from typing import AsyncGenerator, Dict, Any, Optional, Callable
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from .state import MainAgentState, AgentType, TaskStatus, SubAgentInput
 from .prompts import INTENT_DETECTION_PROMPT
 
 logger = logging.getLogger(__name__)
+
+
+async def _get_user(db: AsyncSession, user_id: Optional[int]):
+    """按 user_id 查询 User 对象，找不到返回 None。"""
+    if not user_id:
+        return None
+    from app.db.models import Users
+    result = await db.execute(select(Users).where(Users.id == user_id))
+    return result.scalar_one_or_none()
 
 
 # 功能：统一管理各类子 Agent 的初始化和调用。
@@ -95,17 +105,9 @@ class SubAgents:
 
             elif agent_type == AgentType.QA:
                 # QA Agent 走统一问答接口。
-                from app.db.models import Users
                 qa_agent = self._agents.get(AgentType.QA)
 
-                # 读取当前用户用于权限校验。
-                user = None
-                user_id = input_state.get("user_id")
-                if user_id:
-                    from sqlalchemy import select
-                    from app.db.models import Users
-                    result = await self._db.execute(select(Users).where(Users.id == user_id))
-                    user = result.scalar_one_or_none()
+                user = await _get_user(self._db, input_state.get("user_id"))
 
                 if not user:
                     return {
@@ -216,16 +218,7 @@ class SubAgents:
     async def _invoke_trade_listing(
         self, agent: Any, input_state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        from app.db.models import Users
-        from sqlalchemy import select
-
-        # 读取当前用户。
-        user = None
-        user_id = input_state.get("user_id")
-        if user_id:
-            result = await self._db.execute(select(Users).where(Users.id == user_id))
-            user = result.scalar_one_or_none()
-
+        user = await _get_user(self._db, input_state.get("user_id"))
         if not user:
             return {"success": False, "error": "User not found for trade listing"}
 
@@ -261,16 +254,7 @@ class SubAgents:
     async def _invoke_trade_purchase(
         self, agent: Any, input_state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        from app.db.models import Users
-        from sqlalchemy import select
-
-        # 读取当前用户。
-        user = None
-        user_id = input_state.get("user_id")
-        if user_id:
-            result = await self._db.execute(select(Users).where(Users.id == user_id))
-            user = result.scalar_one_or_none()
-
+        user = await _get_user(self._db, input_state.get("user_id"))
         if not user:
             return {"success": False, "error": "User not found for trade purchase"}
 
@@ -332,16 +316,7 @@ class SubAgents:
     async def _invoke_trade_yield(
         self, agent: Any, input_state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        from app.db.models import Users
-        from sqlalchemy import select
-
-        # 读取当前用户。
-        user = None
-        user_id = input_state.get("user_id")
-        if user_id:
-            result = await self._db.execute(select(Users).where(Users.id == user_id))
-            user = result.scalar_one_or_none()
-
+        user = await _get_user(self._db, input_state.get("user_id"))
         if not user:
             return {"success": False, "error": "User not found for yield calculation"}
 
@@ -600,15 +575,7 @@ class MainAgent:
         state: MainAgentState,
         top_k: int = 5,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        from app.db.models import Users
-        from sqlalchemy import select
-
-        # 读取当前用户。
-        user = None
-        user_id = state.get("user_id")
-        if user_id:
-            result = await self._db.execute(select(Users).where(Users.id == user_id))
-            user = result.scalar_one_or_none()
+        user = await _get_user(self._db, state.get("user_id"))
 
         if not user:
             yield {"type": "error", "data": "User not found"}
