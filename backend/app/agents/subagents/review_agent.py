@@ -199,7 +199,12 @@ class ReviewAgent:
         return state
 
     def _should_rework(self, state: ReviewState) -> str:
-        """Decide whether to loop back for rework or proceed to finalize."""
+        """Decide whether to loop back for rework or proceed to finalize.
+
+        Returns:
+            "rework" — re-run quality/compliance/completeness checks.
+            "done"   — proceed to finalize (approved or manual_review).
+        """
         rework_needed = state.get("rework_needed", False)
         rework_count = state.get("rework_count", 0)
         max_rework = state.get("max_rework", self.max_rework)
@@ -248,7 +253,9 @@ class ReviewAgent:
             state["rework_count"] = rework_count + 1
         elif rework_needed and rework_count >= max_rework:
             state["final_status"] = "manual_review"
-            state["rework_needed"] = False  # stop looping
+            # Clear rework_needed so _should_rework routes to "done" and
+            # stops the review loop when max retries are exhausted.
+            state["rework_needed"] = False
         else:
             state["final_status"] = "approved"
 

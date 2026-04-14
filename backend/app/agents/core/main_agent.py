@@ -16,7 +16,7 @@ from .prompts import INTENT_DETECTION_PROMPT
 logger = logging.getLogger(__name__)
 
 
-async def _get_user(db: AsyncSession, user_id: Optional[int]):
+async def _get_user(db: AsyncSession, user_id: Optional[int]) -> Optional["Users"]:
     """按 user_id 查询 User 对象，找不到返回 None。"""
     if not user_id:
         return None
