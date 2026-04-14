@@ -9,6 +9,7 @@ from typing import Any
 
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph import END, StateGraph
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.core import REVIEW_CRITERIA, ReviewState

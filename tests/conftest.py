@@ -40,7 +40,7 @@ def pytest_configure(config):
 @pytest.fixture
 def sample_trade_state():
     """Provide a sample TradeState for testing"""
-    from datetime import datetime
+    from datetime import datetime, timezone
     return {
         "action": "listing",
         "space_public_id": "test-space-123",
@@ -48,7 +48,7 @@ def sample_trade_state():
         "user_id": 1,
         "user_role": "seller",
         "success": True,
-        "started_at": datetime.utcnow(),
+        "started_at": datetime.now(timezone.utc),
         "result": {},
     }
 

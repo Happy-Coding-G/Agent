@@ -1614,7 +1614,6 @@ Users.received_messages = relationship(
     foreign_keys=[AgentMessageQueue.to_agent_user_id],
     back_populates="to_user",
 )
-Users.agent_configs = relationship("UserAgentConfig", back_populates="user")
 Users.token_usages = relationship("TokenUsage", back_populates="user", order_by="TokenUsage.created_at.desc()")
 
 # Escrow relationships
