@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps.auth import get_current_user, get_db
 from app.db.models import Users
 from app.services.user_agent_service import UserAgentService
-from app.services.safety import PromptSafetyService
 from app.core.errors import ServiceError
 
 router = APIRouter(prefix="/user/agent", tags=["user-agent"])
@@ -307,6 +306,8 @@ async def get_safety_guidelines(
 
     返回安全编写 System Prompt 的最佳实践和禁止事项
     """
+    from app.services.safety import PromptSafetyService
+
     service = PromptSafetyService()
     return {
         "success": True,
@@ -325,6 +326,8 @@ async def validate_prompt_safety(
 
     在实际保存前，先验证 Prompt 是否安全
     """
+    from app.services.safety import PromptSafetyService
+
     service = PromptSafetyService(db)
     result = await service.validate_system_prompt(prompt, user_id=current_user.id)
 

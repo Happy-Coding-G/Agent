@@ -12,8 +12,8 @@ from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps.auth import get_current_user
 from app.db.session import get_db
-from app.core.security import get_current_user
 from app.db.models import Users, FeatureType
 from app.services.token_usage_service import TokenUsageService
 from app.schemas.common import ResponseModel

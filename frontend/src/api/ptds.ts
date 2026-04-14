@@ -14,9 +14,12 @@ import {
   GraphNode,
   MarkdownDocDetail,
   MarkdownDocSummary,
+  Space,
   TreeFolder,
   UploadInitResponse,
 } from "../types";
+
+import { streamSSE } from "./client";
 
 interface SearchResult {
   items: FileBrief[];
@@ -43,12 +46,8 @@ function findFolderById(folders: TreeFolder[], id: number): TreeFolder | null {
 }
 
 // =============================================================================
-// Agent-First API layer
-// All read operations are proxied through /agent/chat.
-// Write operations that require precise parameters are deprecated; use Chat.
+// Agent Chat
 // =============================================================================
-
-import { streamSSE } from "./client";
 
 export async function agentChat(
   message: string,
@@ -77,28 +76,35 @@ export async function agentChatStream(
   });
 }
 
-/** Generic helper: invoke a tool via Agent chat and pick the raw tool result. */
-async function agentInvoke(message: string, spaceId: string) {
-  const res = await agentChat(message, spaceId);
-  const result = (res.result || {}) as Record<string, unknown>;
-  return {
-    answer: typeof result.answer === "string" ? result.answer : undefined,
-    toolResults: Array.isArray(result.tool_results) ? result.tool_results : [],
-  };
+// =============================================================================
+// Spaces
+// =============================================================================
+
+export async function getSpaces(): Promise<Space[]> {
+  return await http<Space[]>("/api/v1/spaces");
 }
 
-function pickToolResult(toolResults: any[], toolName: string, predicate?: (r: any) => boolean) {
-  return toolResults.find((r) => r.tool === toolName && (predicate ? predicate(r) : true));
+export async function createSpace(name: string): Promise<Space> {
+  return await http<Space>("/api/v1/spaces", {
+    method: "POST",
+    json: { name },
+  });
+}
+
+export async function deleteSpace(spaceId: string): Promise<void> {
+  await http<void>(`/api/v1/spaces/${spaceId}`, { method: "DELETE" });
+}
+
+export async function switchSpace(spaceId: string): Promise<Space> {
+  return await http<Space>(`/api/v1/spaces/${spaceId}/switch`, { method: "POST" });
 }
 
 // =============================================================================
-// Spaces / Files (Read via Agent, Write via Chat)
+// Files
 // =============================================================================
 
 export async function getSpaceTree(spaceId: string): Promise<TreeFolder[]> {
-  const { toolResults } = await agentInvoke("列出当前空间的文件目录树", spaceId);
-  const tr = pickToolResult(toolResults, "file_manage", (r) => r.result?.action === "list_tree");
-  return (tr?.result?.tree || []) as TreeFolder[];
+  return await http<TreeFolder[]>(`/api/v1/spaces/${spaceId}/tree`);
 }
 
 export async function searchFiles(params: { spaceId: string; q?: string; folderId?: string }): Promise<SearchResult> {
@@ -123,33 +129,37 @@ export async function searchFiles(params: { spaceId: string; q?: string; folderI
   return { items: filtered, total: filtered.length };
 }
 
-export async function createFolder(_spaceId: string, _data: FolderCreateRequest): Promise<void> {
-  throw new Error("文件夹创建已迁移到 Agent Chat，请在聊天窗口发送指令，例如：创建一个名为 XXX 的文件夹");
+export async function createFolder(spaceId: string, data: FolderCreateRequest): Promise<void> {
+  await http(`/api/v1/spaces/${spaceId}/folders`, {
+    method: "POST",
+    json: data,
+  });
 }
 
-export async function renameFolder(_spaceId: string, _folderPublicId: string, _newName: string): Promise<void> {
-  throw new Error("文件夹重命名已迁移到 Agent Chat，请在聊天窗口发送指令");
+export async function renameFolder(spaceId: string, folderPublicId: string, newName: string): Promise<void> {
+  await http(`/api/v1/spaces/${spaceId}/folders/${folderPublicId}/rename`, {
+    method: "PATCH",
+    json: { new_name: newName },
+  });
 }
 
 export async function initUpload(
-  _spaceId: string,
-  _folderPublicId: string,
-  _filename: string,
-  _sizeBytes: number,
+  spaceId: string,
+  folderId: string,
+  filename: string,
+  sizeBytes: number,
 ): Promise<UploadInitResponse> {
-  throw new Error("文件上传已迁移到 Agent Chat，请在聊天窗口发送指令，例如：上传文件");
+  return await http<UploadInitResponse>(
+    `/api/v1/spaces/${spaceId}/files/upload-init?folder_id=${encodeURIComponent(folderId)}&filename=${encodeURIComponent(filename)}&size_bytes=${sizeBytes}`,
+    { method: "POST" }
+  );
 }
 
-export async function completeUpload(_spaceId: string, _uploadId: string, _objectKey: string): Promise<void> {
-  throw new Error("文件上传已迁移到 Agent Chat，请在聊天窗口发送指令");
-}
-
-export async function getFileView(_spaceId: string, _filePublicId: string): Promise<FileViewResponse> {
-  throw new Error("文件预览已迁移到 Agent Chat，请在聊天窗口发送指令");
-}
-
-export async function renameFile(_spaceId: string, _filePublicId: string, _newName: string): Promise<void> {
-  throw new Error("文件重命名已迁移到 Agent Chat，请在聊天窗口发送指令");
+export async function completeUpload(spaceId: string, uploadId: string, objectKey: string): Promise<void> {
+  await http(
+    `/api/v1/spaces/${spaceId}/files/upload-complete?upload_id=${encodeURIComponent(uploadId)}&object_key=${encodeURIComponent(objectKey)}`,
+    { method: "POST" }
+  );
 }
 
 export async function uploadFileToMinio(uploadUrl: string, file: File, onProgress?: (progress: number) => void): Promise<void> {
@@ -182,32 +192,37 @@ export async function uploadFileToMinio(uploadUrl: string, file: File, onProgres
 }
 
 export async function uploadFile(
-  _spaceId: string,
-  _folderPublicId: string,
-  _file: File,
-  _onProgress?: (progress: number) => void,
+  spaceId: string,
+  folderId: string,
+  file: File,
+  onProgress?: (progress: number) => void,
 ): Promise<void> {
-  throw new Error("文件上传已迁移到 Agent Chat，请在聊天窗口发送指令，例如：上传文件");
+  const init = await initUpload(spaceId, folderId, file.name, file.size);
+  if (!init.upload_url && !init.presigned_url) {
+    throw new Error("No upload URL returned");
+  }
+  await uploadFileToMinio(init.upload_url || init.presigned_url!, file, onProgress);
+  await completeUpload(spaceId, init.upload_id, init.object_key);
+}
+
+export async function getFileView(_spaceId: string, _filePublicId: string): Promise<FileViewResponse> {
+  throw new Error("文件预览已迁移到 Agent Chat，请在聊天窗口发送指令");
+}
+
+export async function renameFile(_spaceId: string, _filePublicId: string, _newName: string): Promise<void> {
+  throw new Error("文件重命名已迁移到 Agent Chat，请在聊天窗口发送指令");
 }
 
 // =============================================================================
-// Markdown (Read via Agent, Save via Chat)
+// Markdown (Read via Direct API)
 // =============================================================================
 
 export async function listMarkdownDocs(spaceId: string): Promise<MarkdownDocSummary[]> {
-  const { toolResults } = await agentInvoke("列出当前空间的所有 Markdown 文档", spaceId);
-  const tr = pickToolResult(toolResults, "markdown_manage", (r) => r.result?.action === "list");
-  return (tr?.result?.documents || []) as MarkdownDocSummary[];
+  return await http<MarkdownDocSummary[]>(`/api/v1/spaces/${spaceId}/markdown-docs`);
 }
 
 export async function getMarkdownDoc(spaceId: string, docId: string): Promise<MarkdownDocDetail> {
-  const { toolResults } = await agentInvoke(`读取 Markdown 文档 ${docId}`, spaceId);
-  const tr = pickToolResult(toolResults, "markdown_manage", (r) => r.result?.action === "get");
-  const doc = tr?.result?.document as MarkdownDocDetail | undefined;
-  if (!doc) {
-    throw new Error("未能通过 Agent 获取 Markdown 文档，请重试");
-  }
-  return doc;
+  return await http<MarkdownDocDetail>(`/api/v1/spaces/${spaceId}/markdown-docs/${docId}`);
 }
 
 export async function saveMarkdownDoc(
@@ -219,13 +234,11 @@ export async function saveMarkdownDoc(
 }
 
 // =============================================================================
-// Knowledge Graph (Read via Agent, Write via Chat)
+// Knowledge Graph (Read via Direct API, Write via Chat)
 // =============================================================================
 
 export async function getKnowledgeGraph(spaceId: string): Promise<GraphData> {
-  const { toolResults } = await agentInvoke("查看当前空间的知识图谱", spaceId);
-  const tr = pickToolResult(toolResults, "graph_manage", (r) => r.result?.action === "get" || r.result?.graph);
-  return (tr?.result?.graph || { nodes: [], edges: [] }) as GraphData;
+  return await http<GraphData>(`/api/v1/spaces/${spaceId}/graph`);
 }
 
 export async function updateGraphNode(
@@ -261,36 +274,22 @@ export async function deleteGraphEdge(_spaceId: string, _edgeId: string): Promis
 }
 
 // =============================================================================
-// Assets (Read/Generate via Agent)
+// Assets (Read via Direct API, Generate via Agent)
 // =============================================================================
 
 export async function listAssets(spaceId: string): Promise<AssetSummary[]> {
-  const { toolResults } = await agentInvoke("列出当前空间的所有数字资产", spaceId);
-  const tr = pickToolResult(toolResults, "asset_manage", (r) => r.result?.action === "list");
-  return (tr?.result?.assets || []) as AssetSummary[];
+  return await http<AssetSummary[]>(`/api/v1/spaces/${spaceId}/assets`);
 }
 
 export async function getAssetDetail(spaceId: string, assetId: string): Promise<AssetDetail> {
-  const { toolResults } = await agentInvoke(`查看资产 ${assetId} 的详细信息`, spaceId);
-  const tr = pickToolResult(toolResults, "asset_manage", (r) => r.result?.action === "get");
-  const asset = tr?.result?.asset as AssetDetail | undefined;
-  if (!asset) {
-    throw new Error("未能通过 Agent 获取资产详情");
-  }
-  return asset;
+  return await http<AssetDetail>(`/api/v1/spaces/${spaceId}/assets/${assetId}`);
 }
 
 export async function generateAsset(spaceId: string, prompt?: string): Promise<AssetDetail> {
-  const { toolResults } = await agentInvoke(
-    `生成数字资产：${prompt || "基于当前空间内容生成知识资产报告"}`,
-    spaceId
-  );
-  const tr = pickToolResult(toolResults, "asset_manage", (r) => r.result?.action === "generate");
-  const asset = tr?.result?.asset as AssetDetail | undefined;
-  if (!asset) {
-    throw new Error("资产生成失败，请通过 Chat 重试");
-  }
-  return asset;
+  return await http<AssetDetail>(`/api/v1/spaces/${spaceId}/assets/generate`, {
+    method: "POST",
+    json: { prompt: prompt || "" },
+  });
 }
 
 // =============================================================================
@@ -361,12 +360,12 @@ export async function getAgentTaskStatus(taskId: string): Promise<{ task_id: str
 }
 
 // =============================================================================
-// Legacy agent sub-endpoints (removed in Agent-First architecture)
+// Legacy agent sub-endpoints (use Chat)
 // =============================================================================
 
 export async function fileQuery(query: string, spaceId: string): Promise<FileQueryResult> {
-  const { answer } = await agentInvoke(`文件查询：${query}`, spaceId);
-  return { files: [], error: answer } as FileQueryResult;
+  const res = await agentChat(`文件查询：${query}`, spaceId);
+  return { files: [], error: res.error } as FileQueryResult;
 }
 
 export async function organizeAssets(
@@ -374,20 +373,17 @@ export async function organizeAssets(
   spaceId: string,
   _generateReport = true
 ): Promise<{ status: string; asset_count: number; message: string }> {
-  const { toolResults } = await agentInvoke(`整理并聚类资产：${assetIds.join(", ")}`, spaceId);
-  const tr = pickToolResult(toolResults, "asset_organize");
-  const success = !!tr?.result?.success;
+  const res = await agentChat(`整理并聚类资产：${assetIds.join(", ")}`, spaceId);
   return {
-    status: success ? "completed" : "failed",
+    status: res.error ? "failed" : "completed",
     asset_count: assetIds.length,
-    message: tr?.result?.message || "请查看 Chat 窗口获取详细结果",
+    message: res.error || "请查看 Chat 窗口获取详细结果",
   };
 }
 
 export async function getAssetClusters(spaceId: string): Promise<any[]> {
-  const { toolResults } = await agentInvoke("查看资产聚类结果", spaceId);
-  const tr = pickToolResult(toolResults, "asset_organize");
-  return (tr?.result?.clusters || []) as any[];
+  const res = await agentChat("查看资产聚类结果", spaceId);
+  return (res.result?.clusters || []) as any[];
 }
 
 export async function triggerReview(
@@ -395,8 +391,6 @@ export async function triggerReview(
   spaceId: string,
   reviewType: "quality" | "compliance" | "completeness" = "quality"
 ): Promise<any> {
-  const { toolResults } = await agentInvoke(`审查文档 ${docId}，类型：${reviewType}`, spaceId);
-  const tr = pickToolResult(toolResults, "review_document");
-  return tr?.result || { doc_id: docId, review_type: reviewType, score: 0, passed: false, issues: [], final_status: "pending", rework_count: 0 };
+  const res = await agentChat(`审查文档 ${docId}，类型：${reviewType}`, spaceId);
+  return res.result || { doc_id: docId, review_type: reviewType, score: 0, passed: false, issues: [], final_status: "pending", rework_count: 0 };
 }
-

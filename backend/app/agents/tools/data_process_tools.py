@@ -1,5 +1,7 @@
-"""
-Data Process Tools - 包装 DataProcessAgent / 摄取流程
+"""Deprecated ingest tools.
+
+文件摄入流程已收敛为外部上传 API，当前模块仅在迁移期保留，
+不再由 MainAgent 的 Tool Registry 注册。
 """
 from __future__ import annotations
 
