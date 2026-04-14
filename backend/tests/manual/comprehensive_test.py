@@ -119,7 +119,7 @@ def test_app_imports():
         record_test("导入 main", "FAIL", str(e))
 
     try:
-        from app.agents.skills import (
+        from app.services.skills import (
             PricingSkill,
             DataLineageSkill,
             MarketAnalysisSkill,
@@ -181,7 +181,7 @@ def test_skill_dataclasses():
 def test_skill_methods():
     """测试 Skill 方法存在性"""
     try:
-        from app.agents.skills import (
+        from app.services.skills import (
             PricingSkill,
             DataLineageSkill,
             MarketAnalysisSkill,
