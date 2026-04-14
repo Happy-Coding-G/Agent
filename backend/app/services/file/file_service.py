@@ -14,7 +14,7 @@ from app.repositories.file_version_repo import FileVersionRepository
 from app.repositories.upload_repo import UploadRepository
 from app.services.base import SpaceAwareService
 from app.utils.MinIO import minio_service
-from app.services.ingest_service import IngestService, spawn_ingest_job
+from app.services.ingest_service import IngestService
 
 
 class SpaceFileService(SpaceAwareService):
@@ -180,17 +180,13 @@ class SpaceFileService(SpaceAwareService):
                 created_by=user.id,
             )
 
-        # 同步执行 Ingest Pipeline（测试环境）或提交到 Celery
-        # 默认使用异步摄取（settings.SYNC_INGEST=False），提高并发吞吐
+        # 同步执行 Ingest Pipeline（测试环境）
+        # 生产环境默认异步：ingest job 已在 create_ingest_job_from_version 内部提交到 Celery
         if settings.SYNC_INGEST:
-            # 同步执行（仅测试用）
             from app.ai.ingest_pipeline import LangChainIngestPipeline
 
             pipeline = LangChainIngestPipeline(self.db)
             await pipeline.run(str(job.ingest_id))
-        else:
-            # 异步执行（生产用，默认）
-            spawn_ingest_job(job.ingest_id)
 
         return {
             "status": "OK",

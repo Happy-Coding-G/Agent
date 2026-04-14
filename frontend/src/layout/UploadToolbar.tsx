@@ -25,7 +25,7 @@ export default function UploadToolbar() {
       setError("Please select a space first.");
       return;
     }
-    
+
     setUploading(true);
     setError(null);
     try {
@@ -80,4 +80,3 @@ export default function UploadToolbar() {
     </div>
   );
 }
-
