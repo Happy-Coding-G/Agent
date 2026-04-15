@@ -50,6 +50,7 @@ async def generate_asset(
             space_public_id=space_id,
             prompt=req.prompt,
             user=current_user,
+            source_asset_ids=req.source_asset_ids,
         )
     except ServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)

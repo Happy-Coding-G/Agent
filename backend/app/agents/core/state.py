@@ -123,6 +123,8 @@ class QAState(TypedDict):
 
 class AssetOrganizeState(TypedDict):
     asset_ids: List[str]
+    space_id: str
+    user: Any
     clustering_result: Dict[str, Any]
     graph_updates: List[Dict[str, Any]]
     summary_report: Optional[str]

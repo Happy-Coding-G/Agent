@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
 from app.repositories.trade_repo import TradeRepository, cents_to_credits
-from app.db.models import TradeListings, Users
+from app.db.models import TradeHoldings, TradeListings, TradeOrders, Users
 from app.core.errors import ServiceError
 from ..asset_service import AssetService
 
@@ -65,7 +65,6 @@ class TradeService:
 
         Transaction: All or nothing - either complete listing is created or nothing.
         """
-        # Get asset (this validates ownership)
         asset = await self._assets.get_asset(space_public_id, asset_id, user)
 
         # Sanitize content
