@@ -13,8 +13,9 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, and_
 
+from app.db.models import BlackboardEvents
 from app.services.trade.negotiation_event_store import NegotiationEventStore
 from app.services.trade.data_rights_events import (
     DataAssetRegisterPayload,
@@ -49,7 +50,7 @@ class DataRightsService:
         self.state_projector = StateProjector(db)
 
     # =========================================================================
-    # 数据资产管理
+    # 数据资产管理（仅通过事件溯源维护，不写入 DataAssets 表）
     # =========================================================================
 
     async def register_data_asset(
@@ -155,8 +156,9 @@ class DataRightsService:
         """
         获取数据资产信息
 
-        从事件溯源中重建资产状态
+        仅从事件溯源中重建资产状态（不再查询 DataAssets 表）。
         """
+        # 从事件溯源中重建资产状态
         events = await self.event_store.get_events(
             session_id=asset_id,
             start_seq=0,
@@ -185,12 +187,31 @@ class DataRightsService:
         """
         列出所有者的数据资产
 
-        Note: 实际实现需要查询数据库，这里提供框架
+        从事件溯源黑板中查询 DATA_ASSET_REGISTER 事件重建列表。
         """
-        # TODO: 实现从数据库查询
-        # 需要添加 DataAssets 表到 models.py
-        logger.info(f"Listing assets for owner {owner_id}")
-        return []
+        result = await self.db.execute(
+            select(BlackboardEvents)
+            .where(
+                and_(
+                    BlackboardEvents.agent_id == owner_id,
+                    BlackboardEvents.event_type == "DATA_ASSET_REGISTER",
+                    BlackboardEvents.session_type == "data_asset",
+                )
+            )
+            .order_by(BlackboardEvents.event_timestamp.desc())
+        )
+        events = result.scalars().all()
+
+        return [
+            {
+                "asset_id": e.session_id,
+                "asset_name": e.payload.get("asset_name", ""),
+                "data_type": e.payload.get("data_type", ""),
+                "asset_type": "raw_data",
+                "is_available_for_trade": True,
+            }
+            for e in events
+        ]
 
     # =========================================================================
     # 数据权益协商

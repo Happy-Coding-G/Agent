@@ -15,7 +15,8 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.db.models import (
     TradeListings, TradeOrders, TradeWallets, TradeHoldings,
-    TradeYieldRuns, TradeTransactionLog, AgentMessageQueue
+    TradeYieldRuns, TradeTransactionLog, AgentMessageQueue,
+    DataRightsTransactions, ComputationMethod, DataRightsStatus,
 )
 from app.core.errors import ServiceError
 
@@ -59,6 +60,7 @@ class TradeRepository:
         asset_id: Optional[str] = None,
         space_public_id: Optional[str] = None,
         tags: Optional[List[str]] = None,
+        rights_template: Optional[Dict[str, Any]] = None,
     ) -> TradeListings:
         """Create a new listing."""
         # Encrypt delivery payload (simplified - use proper encryption in production)
@@ -78,6 +80,7 @@ class TradeRepository:
             public_summary=public_summary,
             preview_excerpt=preview_excerpt,
             delivery_payload_encrypted=delivery_bytes,
+            rights_template=rights_template or {},
             status="active",
         )
 
@@ -532,6 +535,81 @@ class TradeRepository:
             )
         )
         await self._db.execute(stmt)
+
+    async def create_rights_transaction(
+        self,
+        data_asset_id: str,
+        owner_id: int,
+        buyer_id: int,
+        listing_id: str,
+        order_id: str,
+        rights_types: List[str],
+        usage_scope: Dict[str, Any],
+        restrictions: List[str],
+        agreed_price: Optional[float] = None,
+        computation_method: ComputationMethod = ComputationMethod.RAW_DATA,
+        anonymization_level: int = 1,
+        validity_days: int = 365,
+    ) -> DataRightsTransactions:
+        """Create a DataRightsTransaction after purchase."""
+        now = datetime.now(timezone.utc)
+        tx = DataRightsTransactions(
+            transaction_id=str(uuid.uuid4()).replace('-', '')[:32],
+            listing_id=listing_id,
+            order_id=order_id,
+            data_asset_id=data_asset_id,
+            owner_id=owner_id,
+            buyer_id=buyer_id,
+            rights_types=rights_types,
+            usage_scope=usage_scope,
+            restrictions=restrictions,
+            computation_method=computation_method,
+            anonymization_level=anonymization_level,
+            valid_from=now,
+            valid_until=datetime.fromtimestamp(now.timestamp() + validity_days * 86400, tz=timezone.utc),
+            agreed_price=agreed_price,
+            status=DataRightsStatus.ACTIVE,
+            settlement_time=now,
+        )
+        self._db.add(tx)
+        await self._db.flush()
+        await self._db.refresh(tx)
+        return tx
+
+    async def get_active_rights_transaction(
+        self,
+        buyer_id: int,
+        data_asset_id: str,
+    ) -> Optional[DataRightsTransactions]:
+        """Get active rights transaction for a buyer and asset."""
+        now = datetime.now(timezone.utc)
+        stmt = (
+            select(DataRightsTransactions)
+            .where(
+                DataRightsTransactions.buyer_id == buyer_id,
+                DataRightsTransactions.data_asset_id == data_asset_id,
+                DataRightsTransactions.status == DataRightsStatus.ACTIVE,
+                DataRightsTransactions.valid_from <= now,
+                DataRightsTransactions.valid_until >= now,
+            )
+            .order_by(DataRightsTransactions.created_at.desc())
+            .limit(1)
+        )
+        result = await self._db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def check_rights(
+        self,
+        buyer_id: int,
+        data_asset_id: str,
+        required_right: str,
+    ) -> bool:
+        """Check if buyer has a specific active right on an asset."""
+        tx = await self.get_active_rights_transaction(buyer_id, data_asset_id)
+        if not tx:
+            return False
+        rights = tx.rights_types or []
+        return required_right in rights
 
     # ==========================================================================
     # Yield Operations

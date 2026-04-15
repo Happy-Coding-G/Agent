@@ -23,9 +23,44 @@ class TradeGoalInput(BaseModel):
     space_id: Optional[str] = Field(None, description="空间public_id")
 
 
+class CreateListingInput(BaseModel):
+    asset_id: str = Field(description="要上架的数字资产ID")
+    space_id: str = Field(description="资产所在空间public_id")
+    price: Optional[float] = Field(None, description="挂牌价格（不填则自动定价）")
+    category: Optional[str] = Field(None, description="资产分类")
+    tags: Optional[List[str]] = Field(default_factory=list, description="标签列表")
+
+
 def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
     db = registry.db
     user = registry.user
+
+    async def create_listing(
+        asset_id: str,
+        space_id: str,
+        price: Optional[float] = None,
+        category: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        from app.services.trade.trade_service import TradeService
+        from app.core.errors import ServiceError
+
+        try:
+            service = TradeService(db)
+            listing = await service.create_listing(
+                space_public_id=space_id,
+                asset_id=asset_id,
+                user=user,
+                price_credits=price,
+                category=category,
+                tags=tags or [],
+            )
+            return {"success": True, "listing": listing}
+        except ServiceError as e:
+            return {"success": False, "error": e.detail, "status_code": e.status_code}
+        except Exception as e:
+            logger.exception(f"create_listing failed: {e}")
+            return {"success": False, "error": str(e)}
 
     async def trade_goal(
         intent: str,
@@ -99,6 +134,13 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
             return {"success": False, "error": str(e)}
 
     return [
+        StructuredTool.from_function(
+            name="create_listing",
+            func=create_listing,
+            description="将已有的数字资产上架到交易平台。asset_id 和 space_id 必填。",
+            args_schema=CreateListingInput,
+            coroutine=create_listing,
+        ),
         StructuredTool.from_function(
             name="trade_goal",
             func=trade_goal,

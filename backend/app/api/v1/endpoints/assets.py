@@ -38,7 +38,9 @@ async def get_asset(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
 
-@router.post("/generate", response_model=AssetDetail, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/generate", response_model=AssetDetail, status_code=status.HTTP_201_CREATED
+)
 async def generate_asset(
     space_id: str,
     req: AssetGenerateRequest,

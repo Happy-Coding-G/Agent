@@ -177,6 +177,7 @@ class GraphEdgeUpdateRequest(BaseModel):
 # 保留此类仅用于向后兼容，将在未来版本中删除
 class ChatRequest(BaseModel):
     """[DEPRECATED] 请使用 AgentChatRequest"""
+
     space_id: str
     query: str = Field(..., min_length=1)
     top_k: int = Field(default=5, ge=1, le=12)
@@ -184,13 +185,18 @@ class ChatRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "deprecated": True,
-            "description": "已弃用，请使用 AgentChatRequest"
+            "description": "已弃用，请使用 AgentChatRequest",
         }
 
 
 class AssetGenerateRequest(BaseModel):
     prompt: Optional[str] = None
     source_asset_ids: Optional[List[str]] = Field(default=None)
+    publish_to_trade: Optional[bool] = Field(
+        default=None,
+        description="[DEPRECATED] 生成与上架已分离，此字段不再生效",
+        deprecated=True,
+    )
 
 
 class AssetSummary(BaseModel):
@@ -211,6 +217,8 @@ class AssetDetail(BaseModel):
     content_markdown: str
     graph_snapshot: dict
     asset_type: Optional[str] = None
+    asset_origin: Optional[str] = None
+    asset_status: Optional[str] = None
     data_type: Optional[str] = None
     sensitivity_level: Optional[str] = None
     quality_overall_score: Optional[float] = None
@@ -316,11 +324,15 @@ class TradeYieldReport(BaseModel):
 # --- Agent 相关 ---
 class AgentChatRequest(BaseModel):
     """统一的聊天请求模型"""
+
     message: str = Field(..., min_length=1, description="用户消息")
     space_id: str = Field(..., description="工作空间ID")
     context: Optional[Dict[str, Any]] = Field(default=None, description="额外上下文")
     stream: bool = Field(default=False, description="是否使用流式响应")
     top_k: int = Field(default=5, ge=1, le=12, description="检索结果数量（仅QA类请求）")
+    history: Optional[List[Dict[str, str]]] = Field(
+        default=None, description="最近对话历史（QA场景下用于多轮上下文）"
+    )
 
     # 向后兼容：允许使用旧版 query 参数
     @property
@@ -330,14 +342,19 @@ class AgentChatRequest(BaseModel):
 
 class AgentChatResponse(BaseModel):
     """统一的聊天响应模型"""
+
     success: bool = Field(default=True, description="是否成功")
     intent: Optional[str] = Field(default=None, description="识别到的意图")
     agent_type: str = Field(..., description="处理的Agent类型")
     result: Dict[str, Any] = Field(default_factory=dict, description="处理结果")
-    sources: Optional[List[Dict[str, Any]]] = Field(default=None, description="来源引用（包含doc_id, title, score等）")
+    sources: Optional[List[Dict[str, Any]]] = Field(
+        default=None, description="来源引用（包含doc_id, title, score等）"
+    )
     answer: Optional[str] = Field(default=None, description="直接回答文本（QA类型）")
     error: Optional[str] = Field(default=None, description="错误信息")
-    retrieval_debug: Optional[Dict[str, Any]] = Field(default=None, description="检索调试信息")
+    retrieval_debug: Optional[Dict[str, Any]] = Field(
+        default=None, description="检索调试信息"
+    )
 
 
 class AgentTaskCreate(BaseModel):
@@ -380,7 +397,9 @@ class AssetClusterResponse(BaseModel):
 
 class ReviewRequest(BaseModel):
     doc_id: str = Field(..., description="要审查的文档ID")
-    review_type: str = Field(default="quality", description="审查类型: quality/compliance/completeness")
+    review_type: str = Field(
+        default="quality", description="审查类型: quality/compliance/completeness"
+    )
 
 
 class ReviewResponse(BaseModel):
@@ -395,10 +414,14 @@ class ReviewResponse(BaseModel):
 
 # --- 混合市场协商 (Hybrid Market Negotiation) ---
 
+
 class TradeCreateAuctionRequest(BaseModel):
     """创建拍卖请求"""
+
     asset_id: str = Field(..., min_length=1)
-    auction_type: str = Field(..., description="拍卖类型: english, dutch, sealed, vickrey")
+    auction_type: str = Field(
+        ..., description="拍卖类型: english, dutch, sealed, vickrey"
+    )
     starting_price: float = Field(..., gt=0)
     reserve_price: Optional[float] = Field(default=None, gt=0)
     duration_minutes: int = Field(default=60, ge=5, le=10080)  # 5分钟到7天
@@ -406,6 +429,7 @@ class TradeCreateAuctionRequest(BaseModel):
 
 class TradeAuctionResponse(BaseModel):
     """拍卖创建响应"""
+
     lot_id: str
     auction_type: str
     starting_price: float
@@ -418,12 +442,14 @@ class TradeAuctionResponse(BaseModel):
 
 class TradePlaceBidRequest(BaseModel):
     """出价请求"""
+
     lot_id: str
     amount: float = Field(..., gt=0)
 
 
 class TradeBidResponse(BaseModel):
     """出价响应"""
+
     bid_id: str
     current_price: float
     current_winner: Optional[int]
@@ -433,6 +459,7 @@ class TradeBidResponse(BaseModel):
 
 class TradeAuctionStatus(BaseModel):
     """拍卖状态"""
+
     lot_id: str
     auction_type: str
     status: str
@@ -446,6 +473,7 @@ class TradeAuctionStatus(BaseModel):
 
 class TradeCreateNegotiationRequest(BaseModel):
     """创建双边协商请求"""
+
     listing_id: str
     initial_offer: float = Field(..., gt=0)
     max_rounds: int = Field(default=10, ge=1, le=50)
@@ -453,6 +481,7 @@ class TradeCreateNegotiationRequest(BaseModel):
 
 class TradeNegotiationResponse(BaseModel):
     """协商创建响应"""
+
     session_id: str
     seller_id: int
     buyer_id: int
@@ -465,6 +494,7 @@ class TradeNegotiationResponse(BaseModel):
 
 class TradeMakeOfferRequest(BaseModel):
     """出价请求"""
+
     session_id: str
     price: float = Field(..., gt=0)
     terms: Optional[Dict[str, Any]] = Field(default=None)
@@ -473,6 +503,7 @@ class TradeMakeOfferRequest(BaseModel):
 
 class TradeOfferResponse(BaseModel):
     """出价响应"""
+
     offer_id: str
     round: int
     from_party: str
@@ -484,6 +515,7 @@ class TradeOfferResponse(BaseModel):
 
 class TradeRespondOfferRequest(BaseModel):
     """响应出价请求"""
+
     session_id: str
     response: str = Field(..., description="accept, reject, or counter")
     counter_price: Optional[float] = Field(default=None)
@@ -491,6 +523,7 @@ class TradeRespondOfferRequest(BaseModel):
 
 class TradeNegotiationStatus(BaseModel):
     """协商状态"""
+
     session_id: str
     status: str
     current_round: int
@@ -502,6 +535,7 @@ class TradeNegotiationStatus(BaseModel):
 
 class TradeContractNetAnnounceRequest(BaseModel):
     """合同网任务发布请求"""
+
     asset_id: str
     task_description: Dict[str, Any]
     eligibility_criteria: Optional[Dict[str, Any]] = Field(default=None)
@@ -510,6 +544,7 @@ class TradeContractNetAnnounceRequest(BaseModel):
 
 class TradeContractNetResponse(BaseModel):
     """合同网响应"""
+
     announcement_id: str
     phase: str
     deadline: float
@@ -517,7 +552,7 @@ class TradeContractNetResponse(BaseModel):
 
 class TradeContractNetBidRequest(BaseModel):
     """合同网投标请求"""
+
     announcement_id: str
     bid_amount: float = Field(..., gt=0)
     qualifications: Optional[Dict[str, Any]] = Field(default=None)
-
