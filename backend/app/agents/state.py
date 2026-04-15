@@ -18,7 +18,6 @@ class AgentType(str, Enum):
     MAIN = "main"           # 主 Agent
     QA = "qa"               # 问答 Agent
     TRADE = "trade"         # 交易 Agent
-    DATA_PROCESS = "data_process"  # 数据处理 Agent
     ANALYSIS = "analysis"   # 分析 Agent
     CODE = "code"           # 代码 Agent
     CUSTOM = "custom"       # 自定义 Agent

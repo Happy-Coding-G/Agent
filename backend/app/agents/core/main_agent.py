@@ -6,6 +6,7 @@ MainAgent 负责做 capability routing：
 - skill
 - subagent
 """
+
 import json
 import logging
 import uuid
@@ -25,7 +26,9 @@ logger = logging.getLogger(__name__)
 # SubAgents (legacy helper, currently retained for QA streaming compatibility)
 # =============================================================================
 class SubAgents:
-    def __init__(self, db: AsyncSession, llm_client=None, space_path: Optional[str] = None):
+    def __init__(
+        self, db: AsyncSession, llm_client=None, space_path: Optional[str] = None
+    ):
         self._db = db
         self._llm_client = llm_client
         self._space_path = space_path
@@ -45,7 +48,9 @@ class SubAgents:
 
             if self._space_path:
                 self._agents[AgentType.FILE_QUERY] = FileQueryAgent(self._space_path)
-                self._graphs[AgentType.FILE_QUERY] = self._agents[AgentType.FILE_QUERY].graph
+                self._graphs[AgentType.FILE_QUERY] = self._agents[
+                    AgentType.FILE_QUERY
+                ].graph
 
             self._agents[AgentType.QA] = QAAgent(self._db)
             self._graphs[AgentType.QA] = self._agents[AgentType.QA].graph
@@ -54,7 +59,9 @@ class SubAgents:
             self._graphs[AgentType.REVIEW] = self._agents[AgentType.REVIEW].graph
 
             self._agents[AgentType.ASSET_ORGANIZE] = AssetOrganizeAgent(self._db)
-            self._graphs[AgentType.ASSET_ORGANIZE] = self._agents[AgentType.ASSET_ORGANIZE].graph
+            self._graphs[AgentType.ASSET_ORGANIZE] = self._agents[
+                AgentType.ASSET_ORGANIZE
+            ].graph
 
             self._agents[AgentType.TRADE] = TradeAgent(self._db)
             self._graphs[AgentType.TRADE] = self._agents[AgentType.TRADE].graph
@@ -65,10 +72,15 @@ class SubAgents:
             logger.error(f"Failed to import subagent classes: {e}")
             raise
 
-    async def invoke_subagent(self, agent_type: AgentType, input_state: Dict[str, Any]) -> Dict[str, Any]:
+    async def invoke_subagent(
+        self, agent_type: AgentType, input_state: Dict[str, Any]
+    ) -> Dict[str, Any]:
         self._lazy_init()
         # Legacy routing - now handled by Tool Registry. Kept for compat.
-        return {"error": "Legacy subagent routing is deprecated. Use Tool Registry.", "success": False}
+        return {
+            "error": "Legacy subagent routing is deprecated. Use Tool Registry.",
+            "success": False,
+        }
 
     def get_registered_agents(self) -> list[str]:
         self._lazy_init()
@@ -79,7 +91,9 @@ class SubAgents:
 # MainAgent - Tool-Aware ReAct Agent
 # =============================================================================
 class MainAgent:
-    def __init__(self, db: AsyncSession, llm_client=None, space_path: Optional[str] = None):
+    def __init__(
+        self, db: AsyncSession, llm_client=None, space_path: Optional[str] = None
+    ):
         self._db = db
         self._llm_client = llm_client
         self._space_path = space_path
@@ -90,15 +104,20 @@ class MainAgent:
     @property
     def subagents(self) -> SubAgents:
         if self._subagents is None:
-            self._subagents = SubAgents(db=self._db, llm_client=self._llm_client, space_path=self._space_path)
+            self._subagents = SubAgents(
+                db=self._db, llm_client=self._llm_client, space_path=self._space_path
+            )
         return self._subagents
 
     @subagents.setter
     def subagents(self, value):
         self._subagents = value
 
-    def _get_tool_registry(self, user, space_id: Optional[str] = None) -> "AgentToolRegistry":
+    def _get_tool_registry(
+        self, user, space_id: Optional[str] = None
+    ) -> "AgentToolRegistry":
         from app.agents.tools.registry import AgentToolRegistry
+
         return AgentToolRegistry(
             db=self._db,
             user=user,
@@ -108,10 +127,12 @@ class MainAgent:
 
     def _get_skill_registry(self) -> "SkillRegistry":
         from app.agents.skills.registry import SkillRegistry
+
         return SkillRegistry(db=self._db)
 
     def _get_subagent_registry(self, user) -> "SubAgentRegistry":
         from app.agents.subagents.registry import SubAgentRegistry
+
         return SubAgentRegistry(
             db=self._db,
             user=user,
@@ -140,25 +161,25 @@ class MainAgent:
                 "skill": "execute_skill",
                 "subagent": "execute_subagent",
                 "error": "handle_error",
-            }
+            },
         )
 
         workflow.add_conditional_edges(
             "execute_tool",
             self._tool_router,
-            {"continue": "plan", "error": "handle_error", "done": "respond"}
+            {"continue": "plan", "error": "handle_error", "done": "respond"},
         )
 
         workflow.add_conditional_edges(
             "execute_skill",
             self._post_execution_router,
-            {"respond": "respond", "error": "handle_error"}
+            {"respond": "respond", "error": "handle_error"},
         )
 
         workflow.add_conditional_edges(
             "execute_subagent",
             self._post_execution_router,
-            {"respond": "respond", "error": "handle_error"}
+            {"respond": "respond", "error": "handle_error"},
         )
 
         workflow.add_edge("respond", END)
@@ -204,6 +225,7 @@ class MainAgent:
         if user_id:
             from sqlalchemy import select
             from app.db.models import Users
+
             result = await self._db.execute(select(Users).where(Users.id == user_id))
             user = result.scalar_one_or_none()
 
@@ -230,7 +252,9 @@ class MainAgent:
             system_prompt = CAPABILITY_ROUTING_SYSTEM_PROMPT.format(
                 tool_schemas=json.dumps(tool_schemas, ensure_ascii=False, indent=2),
                 skill_schemas=json.dumps(skill_schemas, ensure_ascii=False, indent=2),
-                subagent_schemas=json.dumps(subagent_schemas, ensure_ascii=False, indent=2),
+                subagent_schemas=json.dumps(
+                    subagent_schemas, ensure_ascii=False, indent=2
+                ),
                 user_id=user_id,
                 space_id=space_id or "none",
             )
@@ -239,7 +263,9 @@ class MainAgent:
                 HumanMessage(content=user_request),
             ]
             response = await self._llm_client.ainvoke(messages)
-            content = response.content if hasattr(response, "content") else str(response)
+            content = (
+                response.content if hasattr(response, "content") else str(response)
+            )
 
             decision = self._extract_routing_decision(content)
             if decision:
@@ -283,7 +309,9 @@ class MainAgent:
 
         return state
 
-    async def _fallback_plan(self, state: MainAgentState, registry, intent: AgentType) -> MainAgentState:
+    async def _fallback_plan(
+        self, state: MainAgentState, registry, intent: AgentType
+    ) -> MainAgentState:
         """当 LLM 不可用时，基于简单意图进行 capability fallback。"""
         user_request = state.get("user_request", "")
         space_id = state.get("space_id")
@@ -294,17 +322,12 @@ class MainAgent:
             state["final_answer"] = None
             return state
 
-        if intent == AgentType.DATA_PROCESS:
-            state["active_tool"] = None
-            state["final_answer"] = (
-                "文件摄入流程已收敛为外部上传 API。"
-                "请先调用上传初始化接口、直传对象存储，再调用上传完成接口触发后续摄入。"
-            )
-            return state
-
         tool_map = {
             AgentType.FILE_QUERY: ("file_search", {"query": user_request}),
-            AgentType.REVIEW: ("review_document", {"doc_id": "", "review_type": "standard"}),
+            AgentType.REVIEW: (
+                "review_document",
+                {"doc_id": "", "review_type": "standard"},
+            ),
             AgentType.ASSET_ORGANIZE: ("asset_organize", {"asset_ids": []}),
             AgentType.TRADE: ("trade_goal", {"intent": "yield"}),
         }
@@ -365,11 +388,11 @@ class MainAgent:
 
     def _simple_intent_detection(self, text: str) -> AgentType:
         text_lower = text.lower()
-        ingest_keywords = ["上传", "摄入", "摄取", "导入", "处理文档", "解析文档", "建立索引"]
 
-        if any(kw in text_lower for kw in ingest_keywords):
-            return AgentType.DATA_PROCESS
-        elif any(kw in text_lower for kw in ["查看", "查找", "搜索", "目录"]) or "文件" in text_lower:
+        if (
+            any(kw in text_lower for kw in ["查看", "查找", "搜索", "目录"])
+            or "文件" in text_lower
+        ):
             return AgentType.FILE_QUERY
         elif any(kw in text_lower for kw in ["审查", "检查", "审核", "质量"]):
             return AgentType.REVIEW
@@ -377,7 +400,10 @@ class MainAgent:
             return AgentType.QA
         elif any(kw in text_lower for kw in ["整理", "分类", "聚类", "资产"]):
             return AgentType.ASSET_ORGANIZE
-        elif any(kw in text_lower for kw in ["交易", "购买", "出售", "卖出", "买入", "上架", "卖", "买"]):
+        elif any(
+            kw in text_lower
+            for kw in ["交易", "购买", "出售", "卖出", "买入", "上架", "卖", "买"]
+        ):
             return AgentType.TRADE
         else:
             return AgentType.CHAT
@@ -393,6 +419,7 @@ class MainAgent:
         if user_id:
             from sqlalchemy import select
             from app.db.models import Users
+
             result = await self._db.execute(select(Users).where(Users.id == user_id))
             user = result.scalar_one_or_none()
 
@@ -495,7 +522,10 @@ class MainAgent:
             return state
 
         if not any([tool_results, skill_results, subagent_results]):
-            state["task_result"] = {"answer": "收到，请问有什么可以帮您的？", **capability_results}
+            state["task_result"] = {
+                "answer": "收到，请问有什么可以帮您的？",
+                **capability_results,
+            }
             state["task_status"] = TaskStatus.COMPLETED
             return state
 
@@ -513,7 +543,10 @@ class MainAgent:
                 f"【subagent:{r['subagent']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
                 for r in subagent_results
             )
-            state["task_result"] = {"answer": "\n\n".join(summary_parts), **capability_results}
+            state["task_result"] = {
+                "answer": "\n\n".join(summary_parts),
+                **capability_results,
+            }
             state["task_status"] = TaskStatus.COMPLETED
             return state
 
@@ -526,7 +559,9 @@ class MainAgent:
                 "请直接回复用户，不要暴露内部 capability 名称和 JSON 结构："
             )
             response = await self._llm_client.ainvoke(prompt)
-            content = response.content if hasattr(response, "content") else str(response)
+            content = (
+                response.content if hasattr(response, "content") else str(response)
+            )
             state["task_result"] = {"answer": content.strip(), **capability_results}
             state["task_status"] = TaskStatus.COMPLETED
         except Exception as e:
@@ -544,7 +579,10 @@ class MainAgent:
                 f"【subagent:{r['subagent']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
                 for r in subagent_results
             )
-            state["task_result"] = {"answer": "\n\n".join(summary_parts), **capability_results}
+            state["task_result"] = {
+                "answer": "\n\n".join(summary_parts),
+                **capability_results,
+            }
             state["task_status"] = TaskStatus.COMPLETED
 
         return state
@@ -571,6 +609,7 @@ class MainAgent:
         user_id: Optional[int] = None,
         context: Optional[Dict] = None,
         top_k: int = 5,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         initial_state: MainAgentState = {
             "user_request": message,
@@ -582,7 +621,7 @@ class MainAgent:
             "task_id": str(uuid.uuid4()),
             "task_status": TaskStatus.PENDING,
             "task_result": None,
-            "conversation_history": [],
+            "conversation_history": conversation_history or [],
             "context": context or {},
             "error": None,
             "retry_count": 0,
@@ -629,7 +668,7 @@ class MainAgent:
                 # Stream answer as tokens for UI compatibility
                 chunk_size = 8
                 for i in range(0, len(answer), chunk_size):
-                    yield {"type": "token", "data": answer[i:i+chunk_size]}
+                    yield {"type": "token", "data": answer[i : i + chunk_size]}
 
             yield {"type": "result", "data": task_result}
         except Exception as e:
@@ -676,13 +715,14 @@ class MainAgent:
                 space_public_id=space_id,
                 user=user,
                 top_k=top_k,
+                conversation_history=state.get("conversation_history", []),
             ):
                 if event["type"] == "token":
                     yield {"type": "token", "data": event["content"]}
                 elif event["type"] == "status":
                     yield {"type": "status", "data": event["content"]}
                 elif event["type"] == "sources":
-                    yield {"type": "status", "data": "sources_found"}
+                    yield {"type": "sources", "data": event.get("content", [])}
                 elif event["type"] == "result":
                     result = event["content"]
                     state["subagent_result"] = result
@@ -706,6 +746,7 @@ class MainAgent:
         user_id: Optional[int] = None,
         context: Optional[Dict] = None,
         top_k: int = 5,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         intent = None
         agent_type = None
@@ -713,7 +754,9 @@ class MainAgent:
         error = None
         answer = None
 
-        async for chunk in self.stream_chat(message, space_id, user_id, context, top_k):
+        async for chunk in self.stream_chat(
+            message, space_id, user_id, context, top_k, conversation_history
+        ):
             if chunk["type"] == "intent":
                 intent = chunk["data"]
             elif chunk["type"] == "agent_type":

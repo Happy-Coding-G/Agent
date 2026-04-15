@@ -239,7 +239,7 @@ export type TradeYieldReport = {
 };
 
 // Agent types
-export type AgentType = "file_query" | "data_process" | "review" | "qa" | "asset_organize" | "trade" | "chat";
+export type AgentType = "file_query" | "review" | "qa" | "asset_organize" | "trade" | "chat";
 
 export type AgentChatRequest = {
   message: string;
