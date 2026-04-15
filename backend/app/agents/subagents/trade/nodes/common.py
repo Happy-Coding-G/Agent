@@ -7,7 +7,7 @@ Common Trade Nodes - Agent-First Architecture
 不允许本地策略映射。
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from app.agents.subagents.trade.state import TradeState
@@ -16,6 +16,16 @@ if TYPE_CHECKING:
     from app.services.trade.mechanism_selection_policy import MechanismSelectionPolicy
 
 logger = logging.getLogger(__name__)
+
+# Fallback pricing heuristic constants (used when PricingSkill is unavailable)
+_PRICE_BASE = 20.0           # Base price in credits
+_PRICE_PER_NODE = 1.5        # Credits per knowledge graph node
+_PRICE_PER_EDGE = 1.2        # Credits per knowledge graph edge
+_PRICE_LENGTH_DIVISOR = 180  # Content chars per credit of length factor
+_PRICE_LENGTH_CAP = 120.0    # Max length factor contribution
+_PRICE_MIN = 5.0             # Floor price
+_PRICE_MAX = 500.0           # Ceiling price
+_PRICE_DEFAULT = 50.0        # Default when no asset info available
 
 
 async def validate_input(self, state: TradeState) -> TradeState:
@@ -73,6 +83,7 @@ async def load_asset(self, state: TradeState) -> TradeState:
     try:
         asset_id = state.get("asset_id")
         space_id = state.get("space_public_id")
+        user_id = state.get("user_id")
 
         if not asset_id or not space_id:
             state["asset_info"] = None
@@ -81,13 +92,18 @@ async def load_asset(self, state: TradeState) -> TradeState:
         from app.db.models import Users
         from sqlalchemy import select
 
-        result = await self.db.execute(select(Users).limit(1))
-        user = result.scalar_one_or_none()
+        user = None
+        if user_id:
+            result = await self.db.execute(
+                select(Users).where(Users.id == user_id)
+            )
+            user = result.scalar_one_or_none()
 
         if user:
             asset = await self.assets.get_asset(space_id, asset_id, user)
             state["asset_info"] = asset
         else:
+            logger.warning(f"User not found for user_id={user_id}, cannot load asset")
             state["asset_info"] = None
 
         return state
@@ -113,7 +129,7 @@ async def calculate_price(self, state: TradeState) -> TradeState:
         asset_id = state.get("asset_id")
 
         if not asset_info or not asset_id:
-            state["calculated_price"] = 50.0
+            state["calculated_price"] = _PRICE_DEFAULT
             return state
 
         try:
@@ -129,15 +145,15 @@ async def calculate_price(self, state: TradeState) -> TradeState:
             graph = asset_info.get("graph_snapshot", {})
             node_count = graph.get("node_count", 0)
             edge_count = graph.get("edge_count", 0)
-            length_factor = min(len(content) / 180.0, 120.0)
-            price = 20.0 + length_factor + node_count * 1.5 + edge_count * 1.2
-            state["calculated_price"] = max(5.0, min(500.0, price))
+            length_factor = min(len(content) / _PRICE_LENGTH_DIVISOR, _PRICE_LENGTH_CAP)
+            price = _PRICE_BASE + length_factor + node_count * _PRICE_PER_NODE + edge_count * _PRICE_PER_EDGE
+            state["calculated_price"] = max(_PRICE_MIN, min(_PRICE_MAX, price))
 
         return state
 
     except Exception as e:
         logger.error(f"Price calculation failed: {e}")
-        state["calculated_price"] = 50.0
+        state["calculated_price"] = _PRICE_DEFAULT
         return state
 
 
@@ -215,10 +231,10 @@ async def select_mechanism(self, state: TradeState) -> TradeState:
 
 async def format_result(self, state: TradeState) -> TradeState:
     """格式化最终结果"""
+    state["completed_at"] = datetime.now(timezone.utc)
+
     if not state.get("success"):
         return state
-
-    state["completed_at"] = datetime.utcnow()
 
     if "result" not in state:
         state["result"] = {
