@@ -20,6 +20,7 @@ class UploadRepository:
         size_bytes: int,
         status: str,
         created_by: int,
+        expected_object_key: str | None = None,
     ) -> Uploads:
         u = Uploads(
             public_id=public_id,
@@ -29,6 +30,7 @@ class UploadRepository:
             size_bytes=size_bytes,
             status=status,
             created_by=created_by,
+            expected_object_key=expected_object_key,
         )
         self.db.add(u)
         await self.db.flush()

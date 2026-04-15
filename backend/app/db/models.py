@@ -212,6 +212,7 @@ class Uploads(Base):
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expected_object_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     status: Mapped[str] = mapped_column(
         upload_status_enum, server_default=text("'init'")
     )

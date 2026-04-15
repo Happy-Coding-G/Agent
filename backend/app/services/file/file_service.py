@@ -128,6 +128,7 @@ class SpaceFileService(SpaceAwareService):
                 size_bytes=size_bytes,
                 status="init",
                 created_by=user.id,
+                expected_object_key=object_key,
             )
 
         presigned_url = minio_service.get_upload_url(object_key)
@@ -152,6 +153,9 @@ class SpaceFileService(SpaceAwareService):
             task = await self.uploads.get_by_public_id(upload_id)
             if not task or task.space_id != space_db_id:
                 raise ServiceError(404, "Upload task not found")
+
+            if task.expected_object_key and task.expected_object_key != object_key:
+                raise ServiceError(400, "Object key mismatch")
 
             if task.status == "completed":
                 raise ServiceError(409, "Upload already completed")

@@ -173,3 +173,39 @@ class IngestService:
             logger.info(f"[IngestService] Cancelled job: {ingest_id}")
 
         return revoked
+
+    async def requeue_job(self, ingest_id: str) -> dict:
+        """
+        重新入队 Ingest Job
+
+        仅允许对 failed 或 cancelled 状态的任务重新提交到 Celery
+        """
+        from sqlalchemy import select
+        from app.db.models import IngestJobs
+
+        stmt = select(IngestJobs).where(IngestJobs.ingest_id == uuid.UUID(ingest_id))
+        result = await self.db.execute(stmt)
+        job = result.scalar_one_or_none()
+
+        if not job:
+            return {"success": False, "error": "Job not found"}
+
+        if job.status not in ("failed", "cancelled"):
+            return {"success": False, "error": f"Cannot requeue job with status '{job.status}'"}
+
+        job.status = "queued"
+        job.error = None
+        job.started_at = None
+        job.finished_at = None
+        await self.db.commit()
+
+        try:
+            task_id = self.submit_ingest_job(ingest_id)
+            logger.info(f"[IngestService] Requeued job {ingest_id}, task_id: {task_id}")
+            return {"success": True, "task_id": task_id}
+        except Exception as e:
+            logger.error(f"[IngestService] Failed to requeue job {ingest_id}: {e}")
+            job.status = "failed"
+            job.error = str(e)
+            await self.db.commit()
+            return {"success": False, "error": str(e)}
