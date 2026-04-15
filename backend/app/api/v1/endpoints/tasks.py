@@ -93,6 +93,35 @@ async def list_active_tasks(
         raise HTTPException(status_code=500, detail=f"Failed to list active tasks: {e}")
 
 
+@router.post("/ingest-jobs/{ingest_id}/requeue")
+async def requeue_ingest_job(
+    ingest_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    """
+    重新入队 Ingest Job
+
+    仅允许对 failed 或 cancelled 状态的任务重新提交到 Celery
+    """
+    try:
+        service = IngestService(db)
+        result = await service.requeue_job(ingest_id)
+
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Requeue failed"))
+
+        return {
+            "status": "success",
+            "message": f"Ingest job {ingest_id} requeued",
+            "task_id": result.get("task_id"),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to requeue job: {e}")
+
+
 @router.get("/ingest-jobs/{ingest_id}/status")
 async def get_ingest_job_status(
     ingest_id: str,

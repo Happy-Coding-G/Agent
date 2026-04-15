@@ -107,6 +107,30 @@ class DatabaseMixin:
         return ctx
 
     @staticmethod
+    async def cleanup_existing_chunks(db: AsyncSession, doc_id: uuid.UUID) -> None:
+        """清理该文档已存在的 chunks 和 embeddings，保证重试幂等"""
+        from sqlalchemy import delete
+
+        result = await db.execute(
+            select(DocChunks.chunk_id).where(DocChunks.doc_id == doc_id)
+        )
+        chunk_ids = [r[0] for r in result.all()]
+
+        if chunk_ids:
+            await db.execute(
+                delete(DocChunkEmbeddings).where(
+                    DocChunkEmbeddings.chunk_id.in_(chunk_ids)
+                )
+            )
+            await db.execute(
+                delete(DocChunks).where(DocChunks.doc_id == doc_id)
+            )
+            await db.commit()
+            logger.info(
+                f"[Cleanup] Removed {len(chunk_ids)} existing chunks for doc {doc_id}"
+            )
+
+    @staticmethod
     async def update_job_status(
         ctx: IngestContext, status: str, error: Optional[str] = None
     ) -> IngestContext:
@@ -971,6 +995,10 @@ class LangChainIngestPipeline:
 
         try:
             logger.info(f"[Pipeline.run] Invoking pipeline...")
+            # 先加载 job/doc，如果是重试则清理已写入的 chunks，保证幂等
+            ctx = await DatabaseMixin.get_job(ctx)
+            if ctx.doc:
+                await DatabaseMixin.cleanup_existing_chunks(self.db, ctx.doc.doc_id)
             result = await self.pipeline.ainvoke(ctx)
             if not result.success:
                 logger.error(f"[Pipeline.run] Pipeline returned success=False")
