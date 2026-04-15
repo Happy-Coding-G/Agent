@@ -153,6 +153,9 @@ class SpaceFileService(SpaceAwareService):
             if not task or task.space_id != space_db_id:
                 raise ServiceError(404, "Upload task not found")
 
+            if task.status == "completed":
+                raise ServiceError(409, "Upload already completed")
+
             new_file = await self.files.create(
                 public_id=uuid.uuid4().hex[:32],
                 space_id=space_db_id,
@@ -180,13 +183,28 @@ class SpaceFileService(SpaceAwareService):
                 created_by=user.id,
             )
 
-        # 同步执行 Ingest Pipeline（测试环境）
-        # 生产环境默认异步：ingest job 已在 create_ingest_job_from_version 内部提交到 Celery
+        # 事务已提交后再投递 Celery 任务，避免 worker 竞态读不到数据
         if settings.SYNC_INGEST:
             from app.ai.ingest_pipeline import LangChainIngestPipeline
 
             pipeline = LangChainIngestPipeline(self.db)
             await pipeline.run(str(job.ingest_id))
+        else:
+            try:
+                ingest_service.submit_ingest_job(str(job.ingest_id))
+            except Exception as e:
+                from sqlalchemy import select
+                from app.db.models import IngestJobs
+
+                result = await self.db.execute(
+                    select(IngestJobs).where(IngestJobs.ingest_id == job.ingest_id)
+                )
+                job_record = result.scalar_one_or_none()
+                if job_record:
+                    job_record.status = "failed"
+                    job_record.error = str(e)
+                    await self.db.commit()
+                raise ServiceError(503, f"Failed to enqueue ingest job: {e}")
 
         return {
             "status": "OK",

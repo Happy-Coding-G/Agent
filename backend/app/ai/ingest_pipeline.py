@@ -147,30 +147,8 @@ async def download_file_runnable(ctx: IngestContext) -> IngestContext:
     logger.info(f"[Download] Starting for doc: {ctx.doc.doc_id}")
 
     try:
-        if ctx.doc.source_url:
-            logger.info(f"[Download] Downloading from URL: {ctx.doc.source_url}")
-            import httpx
-
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.get(ctx.doc.source_url)
-                resp.raise_for_status()
-                ctx.file_bytes = resp.content
-                logger.info(
-                    f"[Download] Downloaded {len(ctx.file_bytes)} bytes from URL"
-                )
-
-                content_disp = resp.headers.get("content-disposition", "")
-                if "filename=" in content_disp:
-                    ctx.filename = content_disp.split("filename=", 1)[1].strip('" ')
-                else:
-                    ctx.filename = (
-                        Path(ctx.doc.object_key).name
-                        if ctx.doc.object_key
-                        else "download"
-                    )
-                logger.info(f"[Download] Filename from URL: {ctx.filename}")
-
-        elif ctx.doc.object_key:
+        # 平台内部文件优先使用 object_key 直连 MinIO，避免预签名 URL 过期
+        if ctx.doc.object_key:
             logger.info(
                 f"[Download] Downloading from MinIO: bucket={minio_service.bucket}, key={ctx.doc.object_key}"
             )
@@ -186,6 +164,26 @@ async def download_file_runnable(ctx: IngestContext) -> IngestContext:
             finally:
                 response.close()
                 response.release_conn()
+
+        elif ctx.doc.source_url:
+            logger.info(f"[Download] Downloading from URL: {ctx.doc.source_url}")
+            import httpx
+
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.get(ctx.doc.source_url)
+                resp.raise_for_status()
+                ctx.file_bytes = resp.content
+                logger.info(
+                    f"[Download] Downloaded {len(ctx.file_bytes)} bytes from URL"
+                )
+
+                content_disp = resp.headers.get("content-disposition", "")
+                if "filename=" in content_disp:
+                    ctx.filename = content_disp.split("filename=", 1)[1].strip('" ')
+                else:
+                    ctx.filename = "download"
+                logger.info(f"[Download] Filename from URL: {ctx.filename}")
+
         else:
             logger.error("[Download] Neither source_url nor object_key available")
             raise ValueError("Neither source_url nor object_key available")
@@ -856,7 +854,7 @@ async def build_graph_runnable(ctx: IngestContext) -> IngestContext:
 
     except Exception as e:
         logger.exception(f"[Graph] Critical failure during graph build: {e}")
-        pass
+        raise
 
     return ctx
 
