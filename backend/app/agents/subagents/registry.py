@@ -20,6 +20,9 @@ class QAResearchInput(BaseModel):
     query: str = Field(description="研究或问答请求")
     space_id: str = Field(description="空间public_id")
     top_k: int = Field(default=5, ge=1, le=20, description="检索条数")
+    conversation_history: Optional[List[Dict[str, Any]]] = Field(
+        default=None, description="多轮对话历史"
+    )
 
 
 class ReviewWorkflowInput(BaseModel):

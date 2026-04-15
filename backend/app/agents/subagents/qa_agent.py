@@ -150,12 +150,19 @@ class QAAgent(SpaceAwareService):
         )
         builder.add_node("format_sources", RunnableLambda(self._format_sources_node))
 
-        builder.add_edge("classify_query", "vector_search")
-        builder.add_edge("classify_query", "graph_search")
+        builder.add_conditional_edges(
+            "classify_query",
+            lambda state: ["vector_search", "graph_search"],
+            None,
+        )
         builder.add_edge("vector_search", "hybrid_merge")
         builder.add_edge("graph_search", "hybrid_merge")
         builder.add_edge("hybrid_merge", "rerank_hybrid")
-        builder.add_edge("rerank_hybrid", "generate_answer")
+        builder.add_conditional_edges(
+            "rerank_hybrid",
+            self._has_retrieval_results,
+            {"has_results": "generate_answer", "empty": "no_results_answer"},
+        )
         builder.add_edge("generate_answer", "format_sources")
         builder.add_edge("no_results_answer", "format_sources")
         builder.add_edge("format_sources", END)
@@ -254,26 +261,16 @@ class QAAgent(SpaceAwareService):
         conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Run QA in streaming mode.
+        Run QA in true streaming mode.
 
-        架构变更说明（2026-04-15）：
-        为了消除 stream() 与 run() 之间的双份代码维护问题，
-        stream() 现在统一走 self.graph.ainvoke() 完成完整的检索与生成逻辑，
-        然后将最终答案分块模拟流式输出给用户。这样保证了两种模式的行为一致性。
-
-        Yields events:
-            {"type": "status", "content": "retrieving"}
-            {"type": "sources", "content": [...]}
-            {"type": "token", "content": "..."}
-            {"type": "result", "content": {...}}
-            {"type": "error", "content": "..."}
+        检索阶段同步执行到 rerank，随后使用 LLM 的 astream 进行真正的 token 级流式输出。
         """
         try:
             await self._require_space(space_public_id, user)
 
             yield {"type": "status", "content": "retrieving"}
 
-            initial_state: QAState = {
+            state: QAState = {
                 "query": query,
                 "space_id": space_public_id,
                 "user_id": user.id,
@@ -290,27 +287,65 @@ class QAAgent(SpaceAwareService):
                 "error": None,
             }
 
-            # 统一走 LangGraph，复用所有节点逻辑（classify → vector → graph → merge → rerank → generate → format）
+            # 1. 检索链路：classify → (vector | graph) → merge → rerank
             yield {"type": "status", "content": "searching_knowledge_base"}
-            state = await self.graph.ainvoke(initial_state)
+            state = await self._classify_query_node(state)
 
-            # Yield sources
+            v_state, g_state = await asyncio.gather(
+                self._vector_search_node(dict(state)),
+                self._graph_search_node(dict(state)),
+            )
+            state["vector_results"] = v_state.get("vector_results", [])
+            state["graph_results"] = g_state.get("graph_results", [])
+
+            state = await self._hybrid_merge_node(state)
+            state = await self._rerank_hybrid_node(state)
+
+            # 2. 空结果直接返回，不调用 LLM
+            if not state.get("hybrid_results"):
+                answer = "抱歉，我没有找到与您问题相关的文档内容。请尝试调整您的问题或先上传相关文档。"
+                state["answer"] = answer
+                state = await self._format_sources_node(state)
+                yield {"type": "sources", "content": state.get("sources", [])}
+                yield {"type": "token", "content": answer}
+                yield {
+                    "type": "result",
+                    "content": {
+                        "success": True,
+                        "agent_type": "qa",
+                        "answer": answer,
+                        "sources": state.get("sources", []),
+                        "retrieval_debug": {
+                            "vector_count": len(state.get("vector_results", [])),
+                            "graph_count": len(state.get("graph_results", [])),
+                            "hybrid_count": len(state.get("hybrid_results", [])),
+                        },
+                    },
+                }
+                return
+
+            # 3. 格式化来源并输出
+            state = await self._format_sources_node(state)
             yield {"type": "sources", "content": state.get("sources", [])}
 
-            # Step: Generate streaming answer
+            # 4. 真流式生成
             yield {"type": "status", "content": "generating"}
+            context_text = self._build_context_text(state["hybrid_results"])
+            prompt = self._build_qa_prompt(
+                query, context_text, state.get("conversation_history")
+            )
 
-            answer = state.get("answer") or ""
-            if not answer:
-                answer = "抱歉，我没有找到与您问题相关的文档内容。请尝试调整您的问题或先上传相关文档。"
+            llm = get_llm_client(temperature=0.2)
+            answer_parts: List[str] = []
+            async for token in llm.astream(prompt):
+                text = token.content if hasattr(token, "content") else str(token)
+                if text:
+                    answer_parts.append(text)
+                    yield {"type": "token", "content": text}
 
-            # 将完整答案分块模拟流式输出，保持前端打字机效果
-            chunk_size = max(1, len(answer) // 20)
-            for i in range(0, len(answer), chunk_size):
-                yield {"type": "token", "content": answer[i : i + chunk_size]}
-                await asyncio.sleep(0.02)
+            answer = "".join(answer_parts)
+            state["answer"] = answer
 
-            # Final result
             yield {
                 "type": "result",
                 "content": {
