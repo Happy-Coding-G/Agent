@@ -13,10 +13,13 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
+from sqlalchemy import select, update, and_
+
 from app.repositories.trade_repo import TradeRepository, cents_to_credits
-from app.db.models import TradeHoldings, TradeListings, TradeOrders, Users
+from app.db.models import TradeHoldings, TradeListings, TradeOrders, Users, DataAssets, DataLineageType
 from app.core.errors import ServiceError
 from ..asset_service import AssetService
+from app.services.lineage_service import LineageService, LineageEventType
 
 
 class TradeService:
@@ -67,6 +70,25 @@ class TradeService:
         """
         asset = await self._assets.get_asset(space_public_id, asset_id, user)
 
+        # Enforce sub_license_right on source assets
+        for src_id in asset.get("source_asset_ids", []):
+            result = await self._db.execute(
+                select(DataAssets).where(DataAssets.asset_id == src_id)
+            )
+            src = result.scalar_one_or_none()
+            if not src:
+                continue
+            if src.owner_id == user.id:
+                continue
+            has_right = await self._repo.check_rights(
+                user.id, src_id, "sub_license_right"
+            )
+            if not has_right:
+                raise ServiceError(
+                    403,
+                    f"No sub_license_right for source asset: {src_id}",
+                )
+
         # Sanitize content
         seller_alias = self._generate_user_alias(user.id)
         content_markdown = asset.get("content_markdown", "")
@@ -90,6 +112,20 @@ class TradeService:
             "source_asset_id": asset_id,
         }
 
+        # Build default rights template snapshot
+        rights_template = {
+            "rights_types": ["view", "download", "derivative_right", "sub_license_right"],
+            "usage_scope": {
+                "purpose": "personal_research",
+                "platform_restriction": "internal_only",
+                "attribution_required": True,
+            },
+            "restrictions": ["no_resale_without_permission", "no_identifiable_derivative_without_consent"],
+            "validity_period_days": 365,
+            "computation_method": "raw_data",
+            "anonymization_level": 1,
+        }
+
         # Create listing within transaction
         listing = await self._repo.create_listing(
             seller_user_id=user.id,
@@ -103,6 +139,23 @@ class TradeService:
             asset_id=asset_id,
             space_public_id=space_public_id,
             tags=self._sanitize_tags(tags or []),
+            rights_template=rights_template,
+        )
+
+        # Update asset status to listed
+        await self._db.execute(
+            update(DataAssets)
+            .where(
+                and_(
+                    DataAssets.asset_id == asset_id,
+                    DataAssets.owner_id == user.id,
+                )
+            )
+            .values(
+                asset_status="listed",
+                is_available_for_trade=True,
+                updated_at=datetime.now(timezone.utc),
+            )
         )
 
         await self._db.commit()
@@ -258,6 +311,45 @@ class TradeService:
                 listing_id=listing_id,
                 asset_title=listing.title,
                 seller_alias=listing.seller_alias,
+            )
+
+            # Instantiate data rights transaction
+            rights_template = listing.rights_template or {}
+            from app.db.models import ComputationMethod
+            rights_tx = await self._repo.create_rights_transaction(
+                data_asset_id=listing.asset_id or "",
+                owner_id=listing.seller_user_id,
+                buyer_id=buyer.id,
+                listing_id=listing_id,
+                order_id=order.public_id,
+                rights_types=rights_template.get("rights_types", ["view", "download"]),
+                usage_scope=rights_template.get("usage_scope", {"purpose": "personal_research"}),
+                restrictions=rights_template.get("restrictions", []),
+                agreed_price=cents_to_credits(listing.price_credits),
+                computation_method=ComputationMethod(
+                    rights_template.get("computation_method", "raw_data")
+                ),
+                anonymization_level=rights_template.get("anonymization_level", 1),
+                validity_days=rights_template.get("validity_period_days", 365),
+            )
+
+            # Record rights lineage
+            lineage_service = LineageService(self._db)
+            await lineage_service.record_lineage(
+                entity_type=DataLineageType.ASSET,
+                entity_id=listing.asset_id or "",
+                event_type=LineageEventType.TRANSFORMED,
+                source_entity_type=DataLineageType.ASSET,
+                source_entity_id=listing.asset_id or "",
+                user_id=buyer.id,
+                space_id=listing.space_public_id or "",
+                metadata={
+                    "rights_transaction_id": rights_tx.transaction_id,
+                    "order_id": order.public_id,
+                    "rights_types": rights_template.get("rights_types", []),
+                    "event": "purchase_rights_assigned",
+                },
+                transformation_logic="Data rights assigned upon marketplace purchase",
             )
 
             # Commit transaction
@@ -518,6 +610,17 @@ class TradeService:
         order = await self._repo.get_order_by_public_id(holding.order_id)
         if not order:
             raise ServiceError(500, "Order not found for holding")
+
+        # Verify view right via DataRightsTransactions
+        listing = await self._repo.get_listing_by_public_id(listing_id)
+        if not listing or not listing.asset_id:
+            raise ServiceError(404, "Listing or asset not found")
+
+        has_view = await self._repo.check_rights(
+            user_id, listing.asset_id, "view"
+        )
+        if not has_view:
+            raise ServiceError(403, "No active view right for this asset")
 
         # Record access
         await self._repo.record_access(holding.id)

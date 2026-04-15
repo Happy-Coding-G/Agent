@@ -1,18 +1,33 @@
 from __future__ import annotations
 
 import datetime
+import logging
+import math
 import uuid
 from typing import Any, TypedDict
 
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.embedding_client import embed_query_with_fallback
 from app.core.config import settings
 from app.core.errors import ServiceError
-from app.db.models import DataAssets, DataLineageType, DataSensitivityLevel, Documents, Users
+from app.db.models import (
+    DataAssets,
+    DataLineageType,
+    DataRightsStatus,
+    DataRightsTransactions,
+    DataSensitivityLevel,
+    DocChunkEmbeddings,
+    DocChunks,
+    Documents,
+    Users,
+)
 from app.services.base import SpaceAwareService, get_llm_client, preview_text
 from app.services.graph.graph_service import KnowledgeGraphService
 from app.services.lineage_service import LineageEventType, LineageService
+
+logger = logging.getLogger(__name__)
 
 
 class AssetWorkflowState(TypedDict):
@@ -43,10 +58,15 @@ class AssetService(SpaceAwareService):
             "content_markdown": asset.content_markdown or "",
             "graph_snapshot": asset.graph_snapshot or {},
             "asset_type": asset.asset_type,
+            "asset_origin": asset.asset_origin,
+            "asset_status": asset.asset_status,
             "data_type": asset.data_type,
-            "sensitivity_level": asset.sensitivity_level.value if asset.sensitivity_level else None,
+            "sensitivity_level": asset.sensitivity_level.value
+            if asset.sensitivity_level
+            else None,
             "quality_overall_score": asset.quality_overall_score,
             "lineage_root": asset.lineage_root,
+            "source_asset_ids": asset.source_asset_ids or [],
         }
 
     async def list_assets(self, space_public_id: str, user: Users):
@@ -100,13 +120,20 @@ class AssetService(SpaceAwareService):
         source_asset_ids: list[str] | None = None,
     ):
         space = await self._require_space(space_public_id, user)
-        docs = await self._list_docs(space.id)
+
+        # 1. 智能文档筛选：根据 prompt 提取关键词，召回相关文档
+        query = (prompt or "").strip()
+        if query:
+            docs = await self._select_relevant_docs(space.id, query)
+        else:
+            docs = await self._list_docs(space.id)
+
         graph = await self.graph_service.get_graph(space_public_id, user)
 
         workflow = self._build_workflow()
         state: AssetWorkflowState = {
             "space_public_id": space_public_id,
-            "prompt": (prompt or "").strip(),
+            "prompt": query,
             "docs": docs,
             "graph_nodes": graph.get("nodes", []),
             "graph_edges": graph.get("edges", []),
@@ -119,21 +146,26 @@ class AssetService(SpaceAwareService):
             raise ServiceError(500, "Asset generation returned empty content")
 
         now = datetime.datetime.now(datetime.timezone.utc)
-        asset_id = uuid.uuid4().hex
         summary = preview_text(markdown_text, max_length=180)
         graph_snapshot = {
             "node_count": len(result.get("graph_nodes", [])),
             "edge_count": len(result.get("graph_edges", [])),
         }
-        title = f"Knowledge Asset {now.isoformat()[:19]}"
-
         source_document_ids = [doc["doc_id"] for doc in docs]
 
+        # 2. 检查来源资产的 derivative_right（如果来源资产非用户自有）
+        if source_asset_ids:
+            await self._verify_derivative_rights(user, source_asset_ids)
+
+        # 3. 总是创建新的数字资产记录（不再 upsert）
+        asset_id = uuid.uuid4().hex
         db_asset = DataAssets(
             asset_id=asset_id,
             owner_id=user.id,
-            asset_name=title,
+            asset_name=f"Knowledge Asset {now.isoformat()[:19]}",
             asset_type="knowledge_report",
+            asset_origin="space_generated",
+            asset_status="draft",
             data_type="knowledge_report",
             sensitivity_level=DataSensitivityLevel.MEDIUM,
             content_markdown=markdown_text,
@@ -145,7 +177,7 @@ class AssetService(SpaceAwareService):
             source_asset_ids=source_asset_ids or [],
             raw_data_source="space_documents_and_knowledge_graph",
             storage_location=f"db://data_assets/{asset_id}",
-            is_available_for_trade=True,
+            is_available_for_trade=False,
         )
         self.db.add(db_asset)
         await self.db.commit()
@@ -162,11 +194,15 @@ class AssetService(SpaceAwareService):
                 source_entity_id=str(doc_id),
                 user_id=user.id,
                 space_id=space_public_id,
-                metadata={"generation_type": "knowledge_asset", "prompt": prompt or ""},
+                metadata={
+                    "generation_type": "knowledge_asset",
+                    "prompt": prompt or "",
+                    "operation": "create",
+                },
                 transformation_logic="LLM-generated report from documents and knowledge graph",
             )
 
-        for src_asset_id in (source_asset_ids or []):
+        for src_asset_id in source_asset_ids or []:
             await lineage_service.record_lineage(
                 entity_type=DataLineageType.ASSET,
                 entity_id=asset_id,
@@ -175,11 +211,55 @@ class AssetService(SpaceAwareService):
                 source_entity_id=src_asset_id,
                 user_id=user.id,
                 space_id=space_public_id,
-                metadata={"generation_type": "knowledge_asset_derived"},
+                metadata={
+                    "generation_type": "knowledge_asset_derived",
+                    "operation": "create",
+                },
                 transformation_logic="Derived knowledge asset from source assets",
             )
 
         return self._db_asset_to_dict(db_asset)
+
+    async def _verify_derivative_rights(
+        self,
+        user: Users,
+        source_asset_ids: list[str],
+    ) -> None:
+        """验证用户对来源资产拥有 derivative_right。"""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        for src_id in source_asset_ids:
+            result = await self.db.execute(
+                select(DataAssets).where(DataAssets.asset_id == src_id)
+            )
+            src_asset = result.scalar_one_or_none()
+            if not src_asset:
+                raise ServiceError(404, f"Source asset not found: {src_id}")
+
+            # 自己拥有的资产无需额外权限
+            if src_asset.owner_id == user.id:
+                continue
+
+            # 检查是否存在包含 derivative_right 的活跃权益交易
+            tx_result = await self.db.execute(
+                select(DataRightsTransactions)
+                .where(
+                    and_(
+                        DataRightsTransactions.buyer_id == user.id,
+                        DataRightsTransactions.data_asset_id == src_id,
+                        DataRightsTransactions.status == DataRightsStatus.ACTIVE,
+                        DataRightsTransactions.valid_from <= now,
+                        DataRightsTransactions.valid_until >= now,
+                    )
+                )
+                .order_by(DataRightsTransactions.created_at.desc())
+                .limit(1)
+            )
+            tx = tx_result.scalar_one_or_none()
+            if not tx or "derivative_right" not in (tx.rights_types or []):
+                raise ServiceError(
+                    403,
+                    f"No derivative_right for source asset: {src_id}",
+                )
 
     async def _list_docs(self, space_db_id: int) -> list[dict[str, Any]]:
         q = await self.db.execute(
@@ -200,6 +280,99 @@ class AssetService(SpaceAwareService):
                 }
             )
         return result
+
+    async def _select_relevant_docs(
+        self,
+        space_db_id: int,
+        query: str,
+        top_k_docs: int = 10,
+    ) -> list[dict[str, Any]]:
+        """
+        基于查询向量与文档 chunk 的相似度，智能筛选相关文档。
+
+        策略：
+        1. 将 query 转为 embedding
+        2. 获取空间内所有 chunk 及其 embeddings
+        3. 计算 cosine similarity，取 top chunks
+        4. 按 doc_id 聚合，返回最相关的 N 个文档
+        """
+        docs = await self._list_docs(space_db_id)
+        if not docs:
+            return []
+
+        try:
+            query_vector, _ = await embed_query_with_fallback(query)
+        except Exception as e:
+            logger.warning(f"Failed to embed query for asset doc filtering: {e}")
+            return docs
+
+        if not query_vector:
+            return docs
+
+        stmt = (
+            select(DocChunks, DocChunkEmbeddings, Documents)
+            .join(DocChunkEmbeddings, DocChunkEmbeddings.chunk_id == DocChunks.chunk_id)
+            .join(Documents, Documents.doc_id == DocChunks.doc_id)
+            .where(Documents.space_id == space_db_id)
+        )
+        rows = (await self.db.execute(stmt)).all()
+
+        if not rows:
+            return docs
+
+        def _cosine_similarity(a: list[float], b: list[float]) -> float:
+            if not a or not b or len(a) != len(b):
+                return 0.0
+            dot = sum(x * y for x, y in zip(a, b))
+            norm_a = math.sqrt(sum(x * x for x in a))
+            norm_b = math.sqrt(sum(y * y for y in b))
+            if norm_a == 0 or norm_b == 0:
+                return 0.0
+            return dot / (norm_a * norm_b)
+
+        def _to_float_list(value: Any) -> list[float]:
+            if value is None:
+                return []
+            if isinstance(value, list):
+                return [float(x) for x in value]
+            if isinstance(value, tuple):
+                return [float(x) for x in value]
+            if isinstance(value, str):
+                text = value.strip().strip("[]")
+                if not text:
+                    return []
+                try:
+                    return [float(piece.strip()) for piece in text.split(",")]
+                except ValueError:
+                    return []
+            try:
+                return [float(x) for x in value]
+            except Exception:
+                return []
+
+        scored_chunks: list[tuple[float, str]] = []
+        for chunk, embedding_row, doc in rows:
+            vector = _to_float_list(embedding_row.embedding)
+            if not vector or len(vector) != len(query_vector):
+                continue
+            score = _cosine_similarity(query_vector, vector)
+            scored_chunks.append((score, str(doc.doc_id)))
+
+        scored_chunks.sort(key=lambda x: x[0], reverse=True)
+
+        relevant_doc_ids: list[str] = []
+        seen: set[str] = set()
+        for score, doc_id in scored_chunks:
+            if doc_id not in seen:
+                seen.add(doc_id)
+                relevant_doc_ids.append(doc_id)
+                if len(relevant_doc_ids) >= top_k_docs:
+                    break
+
+        doc_map = {doc["doc_id"]: doc for doc in docs}
+        filtered = [doc_map[doc_id] for doc_id in relevant_doc_ids if doc_id in doc_map]
+
+        return filtered if filtered else docs
 
     def _build_workflow(self):
         from langgraph.graph import END, StateGraph

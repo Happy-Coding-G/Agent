@@ -1,6 +1,7 @@
 """
 Asset Tools - 包装 AssetService + AssetOrganizeAgent
 """
+
 from __future__ import annotations
 
 import logging
@@ -20,7 +21,12 @@ class AssetManageInput(BaseModel):
     space_id: str = Field(description="空间public_id")
     asset_id: Optional[str] = Field(None, description="资产ID（get时使用）")
     prompt: Optional[str] = Field(None, description="生成提示（generate时使用）")
-    source_asset_ids: Optional[List[str]] = Field(None, description="来源资产ID列表（generate时使用）")
+    source_asset_ids: Optional[List[str]] = Field(
+        None, description="来源资产ID列表（generate时使用）"
+    )
+    publish_to_trade: Optional[bool] = Field(
+        None, description="[DEPRECATED] 生成与上架已分离，此字段不再生效", deprecated=True
+    )
 
 
 class AssetOrganizeInput(BaseModel):
@@ -38,9 +44,11 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
         asset_id: Optional[str] = None,
         prompt: Optional[str] = None,
         source_asset_ids: Optional[List[str]] = None,
+        publish_to_trade: Optional[bool] = None,
     ) -> Dict[str, Any]:
         from app.services.asset_service import AssetService
         from app.core.errors import ServiceError
+
         service = AssetService(db)
 
         try:
@@ -59,7 +67,11 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
                     user=user,
                     source_asset_ids=source_asset_ids,
                 )
-                return {"success": True, "asset": record}
+                return {
+                    "success": True,
+                    "asset": record,
+                    "message": f"数字资产已生成完毕（{record.get('asset_id')}）。当前状态：{record.get('asset_status')}。",
+                }
             else:
                 return {"success": False, "error": f"Unknown action: {action}"}
         except ServiceError as e:
@@ -70,6 +82,7 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
 
     async def asset_organize(asset_ids: List[str], space_id: str) -> Dict[str, Any]:
         from app.agents.subagents.asset_organize_agent import AssetOrganizeAgent
+
         agent = AssetOrganizeAgent(db)
         return await agent.run(asset_ids=asset_ids, space_id=space_id, user=user)
 

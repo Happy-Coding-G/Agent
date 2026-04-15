@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 from sqlalchemy import (
     BigInteger,
@@ -87,7 +87,7 @@ document_status_enum = Enum(
     "pending", "processing", "completed", "failed", name="document_status"
 )
 ingest_status_enum = Enum(
-    "queued", "running", "succeeded", "failed", name="ingest_status"
+    "queued", "running", "succeeded", "failed", "cancelled", name="ingest_status"
 )
 
 
@@ -747,6 +747,9 @@ class TradeListings(Base):
     purchase_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     market_view_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     revenue_total: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
+
+    # Rights template snapshot
+    rights_template: Mapped[Dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'"))
 
     # Auto repricing
     auto_reprice_enabled: Mapped[bool] = mapped_column(
@@ -2347,6 +2350,21 @@ class DataRightsStatus(str, PyEnum):
     VIOLATED = "violated"
 
 
+class AssetOrigin(str, PyEnum):
+    """数字资产来源"""
+    SPACE_GENERATED = "space_generated"
+    CHAT_GENERATED = "chat_generated"
+    ASSET_DERIVED = "asset_derived"
+
+
+class AssetStatus(str, PyEnum):
+    """数字资产状态"""
+    DRAFT = "draft"
+    AWAITING_LISTING_CONFIRMATION = "awaiting_listing_confirmation"
+    LISTED = "listed"
+    ARCHIVED = "archived"
+
+
 class DataAssets(Base):
     """数据资产表"""
     __tablename__ = "data_assets"
@@ -2381,6 +2399,8 @@ class DataAssets(Base):
     # 知识资产扩展字段
     space_public_id = Column(String(32), nullable=True)
     asset_type = Column(String(32), default="knowledge")
+    asset_origin = Column(String(32), default="space_generated")
+    asset_status = Column(String(32), default="draft")
     content_markdown = Column(Text, nullable=True)
     content_summary = Column(String(500), nullable=True)
     graph_snapshot = Column(JSONB, default=dict)
@@ -2407,6 +2427,8 @@ class DataRightsTransactions(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     transaction_id = Column(String(64), unique=True, nullable=False, index=True)
     negotiation_id = Column(String(64), ForeignKey("negotiation_sessions.negotiation_id"), nullable=True)
+    listing_id = Column(String(64), nullable=True, index=True)
+    order_id = Column(String(64), nullable=True, index=True)
     data_asset_id = Column(String(64), ForeignKey("data_assets.asset_id"), nullable=False)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     buyer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
