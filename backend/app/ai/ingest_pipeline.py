@@ -24,6 +24,7 @@ from langchain_core.runnables import (
     RunnableBranch,
     chain as runnable_chain,
 )
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -42,6 +43,7 @@ from app.ai.converters import (
     convert_pdf_to_markdown,
     convert_html_to_markdown,
     convert_rtf_to_markdown,
+    convert_odt_to_markdown,
     needs_llm_conversion,
 )
 from app.ai.chunking import chunk_text
@@ -153,26 +155,34 @@ async def download_file_runnable(ctx: IngestContext) -> IngestContext:
                 resp = await client.get(ctx.doc.source_url)
                 resp.raise_for_status()
                 ctx.file_bytes = resp.content
-                logger.info(f"[Download] Downloaded {len(ctx.file_bytes)} bytes from URL")
+                logger.info(
+                    f"[Download] Downloaded {len(ctx.file_bytes)} bytes from URL"
+                )
 
                 content_disp = resp.headers.get("content-disposition", "")
                 if "filename=" in content_disp:
                     ctx.filename = content_disp.split("filename=", 1)[1].strip('" ')
                 else:
                     ctx.filename = (
-                        Path(ctx.doc.object_key).name if ctx.doc.object_key else "download"
+                        Path(ctx.doc.object_key).name
+                        if ctx.doc.object_key
+                        else "download"
                     )
                 logger.info(f"[Download] Filename from URL: {ctx.filename}")
 
         elif ctx.doc.object_key:
-            logger.info(f"[Download] Downloading from MinIO: bucket={minio_service.bucket}, key={ctx.doc.object_key}")
+            logger.info(
+                f"[Download] Downloading from MinIO: bucket={minio_service.bucket}, key={ctx.doc.object_key}"
+            )
             response = minio_service.client.get_object(
                 minio_service.bucket, ctx.doc.object_key
             )
             try:
                 ctx.file_bytes = response.read()
                 ctx.filename = Path(ctx.doc.object_key).name
-                logger.info(f"[Download] Downloaded {len(ctx.file_bytes)} bytes from MinIO, filename={ctx.filename}")
+                logger.info(
+                    f"[Download] Downloaded {len(ctx.file_bytes)} bytes from MinIO, filename={ctx.filename}"
+                )
             finally:
                 response.close()
                 response.release_conn()
@@ -180,7 +190,9 @@ async def download_file_runnable(ctx: IngestContext) -> IngestContext:
             logger.error("[Download] Neither source_url nor object_key available")
             raise ValueError("Neither source_url nor object_key available")
 
-        logger.info(f"[Download] Completed: {ctx.filename}, size={len(ctx.file_bytes)} bytes")
+        logger.info(
+            f"[Download] Completed: {ctx.filename}, size={len(ctx.file_bytes)} bytes"
+        )
         logger.info(f"[Download] ========== DOWNLOAD STAGE DONE ==========")
     except Exception as e:
         logger.exception(f"[Download] Failed: {e}")
@@ -236,6 +248,7 @@ async def extract_text_runnable(ctx: IngestContext) -> IngestContext:
             # Pandoc 不可用，降级到 Docx2txtLoader
             logger.info(f"[Extract] Pandoc failed, falling back to Docx2txtLoader")
             from langchain_community.document_loaders import Docx2txtLoader
+
             loader = Docx2txtLoader(str(ctx.file_path))
             docs = loader.load()
             ctx.raw_text = "\n\n".join(d.page_content for d in docs)
@@ -267,6 +280,7 @@ async def extract_text_runnable(ctx: IngestContext) -> IngestContext:
         else:
             logger.info(f"[Extract] Pandoc RTF failed, falling back to TextLoader")
             from langchain_community.document_loaders import TextLoader
+
             loader = TextLoader(str(ctx.file_path), encoding="utf-8", errors="ignore")
             docs = loader.load()
             ctx.raw_text = "\n\n".join(d.page_content for d in docs)
@@ -283,6 +297,7 @@ async def extract_text_runnable(ctx: IngestContext) -> IngestContext:
         else:
             logger.info(f"[Extract] Pandoc ODT failed, falling back to TextLoader")
             from langchain_community.document_loaders import TextLoader
+
             loader = TextLoader(str(ctx.file_path), encoding="utf-8", errors="ignore")
             docs = loader.load()
             ctx.raw_text = "\n\n".join(d.page_content for d in docs)
@@ -298,8 +313,11 @@ async def extract_text_runnable(ctx: IngestContext) -> IngestContext:
             logger.info(f"[Extract] unified PDF pipeline conversion successful")
         else:
             # 降级到 PyPDFLoader
-            logger.info(f"[Extract] unified PDF pipeline failed, falling back to PyPDFLoader")
+            logger.info(
+                f"[Extract] unified PDF pipeline failed, falling back to PyPDFLoader"
+            )
             from langchain_community.document_loaders import PyPDFLoader
+
             loader = PyPDFLoader(str(ctx.file_path))
             docs = loader.load()
             ctx.raw_text = "\n\n".join(d.page_content for d in docs)
@@ -322,8 +340,11 @@ async def extract_text_runnable(ctx: IngestContext) -> IngestContext:
 
     # 其他格式降级到 TextLoader
     else:
-        logger.info(f"[Extract] Processing as unknown format, suffix={suffix}, using TextLoader")
+        logger.info(
+            f"[Extract] Processing as unknown format, suffix={suffix}, using TextLoader"
+        )
         from langchain_community.document_loaders import TextLoader
+
         loader = TextLoader(str(ctx.file_path), encoding="utf-8", errors="ignore")
         docs = loader.load()
         ctx.raw_text = "\n\n".join(d.page_content for d in docs)
@@ -332,11 +353,15 @@ async def extract_text_runnable(ctx: IngestContext) -> IngestContext:
     ctx.documents = [
         Document(
             page_content=ctx.raw_text,
-            metadata={"source": ctx.filename, "conversion_method": conversion_method}
+            metadata={"source": ctx.filename, "conversion_method": conversion_method},
         )
     ]
-    logger.info(f"[Extract] Text extracted: {len(ctx.raw_text)} chars, method: {conversion_method}")
-    logger.info(f"[Extract] First 200 chars: {ctx.raw_text[:200] if ctx.raw_text else '(empty)'}")
+    logger.info(
+        f"[Extract] Text extracted: {len(ctx.raw_text)} chars, method: {conversion_method}"
+    )
+    logger.info(
+        f"[Extract] First 200 chars: {ctx.raw_text[:200] if ctx.raw_text else '(empty)'}"
+    )
     logger.info(f"[Extract] ========== EXTRACT STAGE DONE ==========")
     return ctx
 
@@ -422,7 +447,6 @@ def split_for_llm(ctx: IngestContext) -> List[str]:
 async def convert_segment(text: str) -> str:
     """单段 Markdown 转换"""
     from langchain_openai import ChatOpenAI
-    from pydantic import SecretStr
 
     llm = ChatOpenAI(
         model=settings.DEEPSEEK_MODEL,
@@ -583,17 +607,21 @@ async def chunk_document_runnable(ctx: IngestContext) -> IngestContext:
                 "end_offset": ch.end_char,
                 "source_type": ch.source_type,
                 **ch.metadata,
-            }
+            },
         )
         final_chunks.append(doc)
 
     ctx.chunks = final_chunks
 
     if chunks:
-        logger.info(f"[Chunk] First chunk: {len(chunks[0].content)} chars, type: {chunks[0].source_type}")
+        logger.info(
+            f"[Chunk] First chunk: {len(chunks[0].content)} chars, type: {chunks[0].source_type}"
+        )
         logger.info(f"[Chunk] Chunk sizes: {[len(c.content) for c in chunks[:5]]}")
 
-    logger.info(f"[Chunk] Created {len(final_chunks)} chunks, strategy: {chunks[0].source_type if chunks else 'none'}")
+    logger.info(
+        f"[Chunk] Created {len(final_chunks)} chunks, strategy: {chunks[0].source_type if chunks else 'none'}"
+    )
     logger.info(f"[Chunk] ========== CHUNK STAGE DONE ==========")
     return ctx
 
@@ -623,16 +651,22 @@ async def store_embeddings_runnable(ctx: IngestContext) -> IngestContext:
         batch_num = i // batch_size + 1
         total_batches = (len(texts) + batch_size - 1) // batch_size
 
-        logger.info(f"[Embeddings] Processing batch {batch_num}/{total_batches}, size={len(batch)}")
+        logger.info(
+            f"[Embeddings] Processing batch {batch_num}/{total_batches}, size={len(batch)}"
+        )
 
         try:
             vectors, model_name = await embed_documents_with_fallback(batch)
-            logger.info(f"[Embeddings] Batch {batch_num}: got {len(vectors)} vectors, model={model_name}")
+            logger.info(
+                f"[Embeddings] Batch {batch_num}: got {len(vectors)} vectors, model={model_name}"
+            )
         except Exception as e:
             logger.exception(f"[Embeddings] Batch {batch_num} embedding failed: {e}")
             raise
 
-        for j, (chunk_doc, vector) in enumerate(zip(ctx.chunks[i : i + batch_size], vectors)):
+        for j, (chunk_doc, vector) in enumerate(
+            zip(ctx.chunks[i : i + batch_size], vectors)
+        ):
             try:
                 chunk = DocChunks(
                     doc_id=ctx.doc.doc_id,
@@ -660,7 +694,9 @@ async def store_embeddings_runnable(ctx: IngestContext) -> IngestContext:
 
     await ctx.db.commit()
     logger.info(f"[Embeddings] Database commit successful")
-    logger.info(f"[Embeddings] Stored {chunk_index} chunks with embeddings, model={model_name}")
+    logger.info(
+        f"[Embeddings] Stored {chunk_index} chunks with embeddings, model={model_name}"
+    )
     logger.info(f"[Embeddings] ========== EMBEDDINGS STAGE DONE ==========")
     return ctx
 
@@ -715,7 +751,9 @@ async def build_graph_runnable(ctx: IngestContext) -> IngestContext:
         # 只处理前10个chunk
         chunks_to_process = ctx.chunks[:10]
 
-        logger.info(f"[Graph] Starting multi-step graph extraction for doc: {ctx.doc.doc_id}")
+        logger.info(
+            f"[Graph] Starting multi-step graph extraction for doc: {ctx.doc.doc_id}"
+        )
 
         doc_id_str = str(ctx.doc.doc_id)
         graph_id_str = str(ctx.doc.graph_id)
@@ -791,7 +829,9 @@ async def build_graph_runnable(ctx: IngestContext) -> IngestContext:
                             target=rel.target,
                             type=rel_type,
                             fact=rel.fact,
-                            confidence=rel.confidence if rel.confidence is not None else 1.0,
+                            confidence=rel.confidence
+                            if rel.confidence is not None
+                            else 1.0,
                             polarity=rel.polarity if rel.polarity is not None else 1,
                             qualifiers=json.dumps(rel.qualifiers),
                             attrs=json.dumps(rel.attributes),
@@ -842,8 +882,12 @@ async def initialize(ctx: IngestContext) -> IngestContext:
 
     logger.info(f"[Pipeline] Job found: {ctx.job.ingest_id}, status: {ctx.job.status}")
     logger.info(f"[Pipeline] Doc found: doc_id={ctx.doc.doc_id}, title={ctx.doc.title}")
-    logger.info(f"[Pipeline] Doc source_url={ctx.doc.source_url}, object_key={ctx.doc.object_key}")
-    logger.info(f"[Pipeline] Doc space_id={ctx.doc.space_id}, graph_id={ctx.doc.graph_id}")
+    logger.info(
+        f"[Pipeline] Doc source_url={ctx.doc.source_url}, object_key={ctx.doc.object_key}"
+    )
+    logger.info(
+        f"[Pipeline] Doc space_id={ctx.doc.space_id}, graph_id={ctx.doc.graph_id}"
+    )
 
     await DatabaseMixin.update_job_status(ctx, "running")
     logger.info(f"[Pipeline] Status updated to 'running'")
@@ -881,12 +925,20 @@ def create_ingest_pipeline():
     save_step = RunnableLambda(save_markdown_runnable)
     chunk_step = RunnableLambda(chunk_document_runnable)
 
+    def merge_parallel_results(results: dict) -> IngestContext:
+        """合并并行处理结果
+
+        embeddings 和 graph 分支操作的是同一个 ctx 引用（按引用传递），
+        两边都通过副作用完成数据持久化。返回 embeddings 分支结果即可。
+        """
+        return results["embeddings"]
+
     parallel_processing = RunnableParallel(
         {
             "embeddings": RunnableLambda(store_embeddings_runnable),
             "graph": RunnableLambda(build_graph_runnable),
         }
-    ) | RunnableLambda(lambda results: results["embeddings"])
+    ) | RunnableLambda(merge_parallel_results)
 
     pipeline = (
         initialize
@@ -908,12 +960,6 @@ def create_ingest_pipeline():
 
 class LangChainIngestPipeline:
     """LCEL 实现的 Ingest Pipeline（向后兼容）"""
-
-    LLM_CHUNK_SIZE = 3000
-    LLM_CHUNK_OVERLAP = 200
-    MARKDOWN_CHUNK_SIZE = 1200
-    MARKDOWN_CHUNK_OVERLAP = 120
-    EMBEDDING_BATCH_SIZE = 32
 
     def __init__(self, db: AsyncSession):
         self.db = db

@@ -7,7 +7,7 @@ from app.api.deps.auth import get_current_user
 from app.core.errors import ServiceError
 from app.db.models import Users
 from app.db.session import get_db
-from app.schemas.schemas import MarkdownDocDetail, MarkdownDocSaveRequest, MarkdownDocSummary
+from app.schemas.schemas import MarkdownDocDetail, MarkdownDocSummary
 from app.services.markdown_service import MarkdownDocumentService
 
 router = APIRouter(prefix="/spaces/{space_id}/markdown-docs", tags=["Markdown"])
@@ -38,21 +38,3 @@ async def get_markdown_doc(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
 
-@router.put("/{doc_id}", response_model=MarkdownDocDetail)
-async def save_markdown_doc(
-    space_id: str,
-    doc_id: str,
-    req: MarkdownDocSaveRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: Users = Depends(get_current_user),
-):
-    try:
-        return await MarkdownDocumentService(db).save_document(
-            space_public_id=space_id,
-            doc_id=doc_id,
-            markdown_text=req.markdown_text,
-            title=req.title,
-            user=current_user,
-        )
-    except ServiceError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail)

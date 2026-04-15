@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import datetime
-import hashlib
 import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.markdown_utils import normalize_markdown
 from app.core.errors import ServiceError
 from app.db.models import DocChunks, Documents, Users
-from app.services.base import SpaceAwareService, extract_title_from_text
+from app.services.base import SpaceAwareService
 from app.utils.MinIO import minio_service
 
 
@@ -74,39 +71,6 @@ class MarkdownDocumentService(SpaceAwareService):
             "content_hash": doc.content_hash,
             "chunk_count": await self._count_chunks(doc.doc_id),
         }
-
-    async def save_document(
-        self,
-        *,
-        space_public_id: str,
-        doc_id: str,
-        markdown_text: str,
-        title: str | None,
-        user: Users,
-    ):
-        """
-        保存 Markdown 文档（仅保留基础字段更新，向量重建已移除）
-        """
-        space_db_id = await self._require_space(space_public_id, user)
-        doc = await self._get_doc_in_space(space_db_id, doc_id)
-
-        normalized = normalize_markdown(markdown_text)
-        now = datetime.datetime.now(datetime.timezone.utc)
-
-        doc.markdown_text = normalized
-        doc.title = (
-            (title or "").strip() or extract_title_from_text(normalized) or doc.title
-        )
-        doc.content_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-        doc.updated_at = now
-        doc.markdown_object_key = doc.markdown_object_key or self._default_markdown_key(
-            doc
-        )
-
-        minio_service.upload_text(doc.markdown_object_key, normalized)
-        await self.db.commit()
-
-        return await self.get_document(space_public_id, doc_id, user)
 
     async def _count_chunks(self, doc_uuid: uuid.UUID) -> int:
         q = await self.db.execute(

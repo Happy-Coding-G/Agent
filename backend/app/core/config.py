@@ -23,19 +23,10 @@ class Settings(BaseSettings):
     # LLM / Embeddings (LangChain)
     DEEPSEEK_API_KEY: str = Field(
         default="",
-        description="DeepSeek API key (required, set via DEEPSEEK_API_KEY env var)",
+        description="DeepSeek API key",
     )
     DEEPSEEK_BASE_URL: str = Field(default="https://api.deepseek.com/v1")
     DEEPSEEK_MODEL: str = Field(default="deepseek-chat")
-
-    QWEN_API_KEY: str = Field(
-        default="",
-        description="Qwen/DashScope API key (required, set via QWEN_API_KEY env var)",
-    )
-    QWEN_BASE_URL: str = Field(
-        default="https://dashscope.aliyuncs.com/compatible-mode/v1"
-    )
-    QWEN_EMBEDDING: str = Field(default="text-embedding-v2")
 
     # Remote Embedding (Qwen3-Embedding-4B)
     REMOTE_EMBEDDING_ENABLED: bool = Field(default=False)
