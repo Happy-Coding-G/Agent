@@ -48,60 +48,77 @@ class SubAgents:
         self._agents: Dict[AgentType, Any] = {}
         self._graphs: Dict[AgentType, Any] = {}
         self._handlers: Dict[AgentType, Any] = {}  # 注册表：AgentType → handler
-        self._initialized = False
+        self._initialized_types: set = set()
+
+    def _ensure_agent(self, agent_type: AgentType):
+        """按需延迟初始化指定的 subagent，避免一次性加载全部代理。"""
+        if agent_type in self._initialized_types:
+            return
+
+        try:
+            if agent_type == AgentType.FILE_QUERY and self._space_path:
+                from app.agents.subagents.file_query_agent import FileQueryAgent
+
+                self._agents[agent_type] = FileQueryAgent(self._space_path)
+                self._graphs[agent_type] = self._agents[agent_type].graph
+
+            elif agent_type == AgentType.QA:
+                from app.agents.subagents.qa_agent import QAAgent
+
+                self._agents[agent_type] = QAAgent(self._db)
+                self._graphs[agent_type] = self._agents[agent_type].graph
+
+            elif agent_type == AgentType.REVIEW:
+                from app.agents.subagents.review_agent import ReviewAgent
+
+                self._agents[agent_type] = ReviewAgent(self._db)
+                self._graphs[agent_type] = self._agents[agent_type].graph
+
+            elif agent_type == AgentType.ASSET_ORGANIZE:
+                from app.agents.subagents.asset_organize_agent import AssetOrganizeAgent
+
+                self._agents[agent_type] = AssetOrganizeAgent(self._db)
+                self._graphs[agent_type] = self._agents[agent_type].graph
+
+            elif agent_type == AgentType.TRADE:
+                from app.agents.subagents.trade.agent import TradeAgent
+
+                self._agents[agent_type] = TradeAgent(self._db)
+                self._graphs[agent_type] = self._agents[agent_type].graph
+
+            self._initialized_types.add(agent_type)
+            logger.info(f"Sub-agent initialized: {agent_type.value}")
+        except Exception as e:
+            logger.exception(f"Failed to initialize sub-agent {agent_type.value}: {e}")
+            raise
 
     def _lazy_init(self):
-        if self._initialized:
-            return
-        try:
-            from app.agents.subagents.file_query_agent import FileQueryAgent
-            from app.agents.subagents.qa_agent import QAAgent
-            from app.agents.subagents.review_agent import ReviewAgent
-            from app.agents.subagents.asset_organize_agent import AssetOrganizeAgent
-            from app.agents.subagents.trade.agent import TradeAgent
+        """保留旧的 all-at-once 初始化入口，供仍需全量初始化的旧代码使用。"""
+        for at in (
+            AgentType.FILE_QUERY,
+            AgentType.QA,
+            AgentType.REVIEW,
+            AgentType.ASSET_ORGANIZE,
+            AgentType.TRADE,
+        ):
+            try:
+                self._ensure_agent(at)
+            except Exception:
+                pass
 
-            if self._space_path:
-                self._agents[AgentType.FILE_QUERY] = FileQueryAgent(self._space_path)
-                self._graphs[AgentType.FILE_QUERY] = self._agents[
-                    AgentType.FILE_QUERY
-                ].graph
-
-            self._agents[AgentType.QA] = QAAgent(self._db)
-            self._graphs[AgentType.QA] = self._agents[AgentType.QA].graph
-
-            self._agents[AgentType.REVIEW] = ReviewAgent(self._db)
-            self._graphs[AgentType.REVIEW] = self._agents[AgentType.REVIEW].graph
-
-            self._agents[AgentType.ASSET_ORGANIZE] = AssetOrganizeAgent(self._db)
-            self._graphs[AgentType.ASSET_ORGANIZE] = self._agents[
-                AgentType.ASSET_ORGANIZE
-            ].graph
-
-            self._agents[AgentType.TRADE] = TradeAgent(self._db)
-            self._graphs[AgentType.TRADE] = self._agents[AgentType.TRADE].graph
-
-            # 注册各 AgentType 的调用处理器（注册表模式）。
-            # 新增 Agent 需要：1) import, 2) 实例化并加入 _agents/_graphs,
-            # 3) 编写 _invoke_xxx handler, 4) 在此注册。
-            self._handlers = {
-                AgentType.FILE_QUERY: self._invoke_file_query,
-                AgentType.QA: self._invoke_qa,
-                AgentType.REVIEW: self._invoke_review,
-                AgentType.ASSET_ORGANIZE: self._invoke_asset_organize,
-                AgentType.TRADE: self._invoke_trade,
-                AgentType.CHAT: self._invoke_chat,
-            }
-
-            self._initialized = True
-            logger.info("All sub-agents initialized successfully")
-        except ImportError as e:
-            logger.error(f"Failed to import subagent classes: {e}")
-            raise
+        self._handlers = {
+            AgentType.FILE_QUERY: self._invoke_file_query,
+            AgentType.QA: self._invoke_qa,
+            AgentType.REVIEW: self._invoke_review,
+            AgentType.ASSET_ORGANIZE: self._invoke_asset_organize,
+            AgentType.TRADE: self._invoke_trade,
+            AgentType.CHAT: self._invoke_chat,
+        }
 
     async def invoke_subagent(
         self, agent_type: AgentType, input_state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        self._lazy_init()
+        self._ensure_agent(agent_type)
         # Legacy routing - now handled by Tool Registry. Kept for compat.
         return {
             "error": "Legacy subagent routing is deprecated. Use Tool Registry.",
@@ -109,8 +126,7 @@ class SubAgents:
         }
 
     def get_registered_agents(self) -> list[str]:
-        self._lazy_init()
-        return [agent_type.value for agent_type in self._graphs.keys()]
+        return [agent_type.value for agent_type in self._agents.keys()]
 
 
 # =============================================================================
@@ -413,8 +429,9 @@ class MainAgent:
         return None
 
     def _simple_intent_detection(self, text: str) -> AgentType:
-        text_lower = text.lower()
+        text_lower = text.lower().strip()
 
+        # 1. 显式命中专用代理时直接路由
         if (
             any(kw in text_lower for kw in ["查看", "查找", "搜索", "目录"])
             or "文件" in text_lower
@@ -422,8 +439,6 @@ class MainAgent:
             return AgentType.FILE_QUERY
         elif any(kw in text_lower for kw in ["审查", "检查", "审核", "质量"]):
             return AgentType.REVIEW
-        elif any(kw in text_lower for kw in ["问答", "回答", "问题", "查询", "检索"]):
-            return AgentType.QA
         elif any(kw in text_lower for kw in ["整理", "分类", "聚类", "资产"]):
             return AgentType.ASSET_ORGANIZE
         elif any(
@@ -431,8 +446,28 @@ class MainAgent:
             for kw in ["交易", "购买", "出售", "卖出", "买入", "上架", "卖", "买"]
         ):
             return AgentType.TRADE
-        else:
+
+        # 2. 常见问答/知识型问法优先走 QA
+        qa_keywords = [
+            # 中文
+            "问答", "回答", "问题", "查询", "检索",
+            "什么", "解释", "区别", "对比", "比较", "差异",
+            "如何", "怎么", "为什么", "谁", "哪里", "哪些",
+            "怎样", "是什么意思", "是什么", "如何理解",
+            # 英文
+            "what", "explain", "difference", "differences", "compare",
+            "how", "why", "who", "where", "which", "vs", "versus",
+            "meaning of", "what is", "what are",
+        ]
+        if any(kw in text_lower for kw in qa_keywords):
+            return AgentType.QA
+
+        # 3. 打招呼/闲聊等极短句走 CHAT，其余默认尝试 QA
+        chat_keywords = ["你好", "hello", "hi", "在吗", "谢谢", "再见", "help"]
+        if len(text_lower) <= 6 or any(kw in text_lower for kw in chat_keywords):
             return AgentType.CHAT
+
+        return AgentType.QA
 
     async def _execute_tool(self, state: MainAgentState) -> MainAgentState:
         """通过 registry 执行当前 active_tool。"""
@@ -716,10 +751,12 @@ class MainAgent:
 
         qa_agent = None
         try:
-            self.subagents._lazy_init()
+            self.subagents._ensure_agent(AgentType.QA)
             qa_agent = self.subagents._agents.get(AgentType.QA)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception(f"Failed to initialize QA Agent: {e}")
+            yield {"type": "error", "data": f"QA Agent initialization failed: {e}"}
+            return
 
         if not qa_agent:
             yield {"type": "error", "data": "QA Agent not available"}
