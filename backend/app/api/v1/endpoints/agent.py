@@ -142,6 +142,7 @@ async def agent_chat(
             user_id=current_user.id,
             context=req.context,
             top_k=req.top_k,
+            conversation_history=req.history or [],
         )
 
         await _update_agent_task(
@@ -196,7 +197,7 @@ async def agent_chat_stream(
     )
 
     await db.commit()
-    await db.close()
+    # 注意：不在此处主动关闭 db，由 FastAPI 请求生命周期自动管理
 
     task_public_id = task.public_id
     final_result = {}
@@ -214,6 +215,7 @@ async def agent_chat_stream(
                     user_id=current_user.id,
                     context=req.context,
                     top_k=req.top_k,
+                    conversation_history=req.history or [],
                 ):
                     if chunk.get("type") == "intent" and "intent" not in final_result:
                         final_result["intent"] = chunk["data"]

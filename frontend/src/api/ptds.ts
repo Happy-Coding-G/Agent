@@ -63,9 +63,10 @@ export async function agentChat(
 export async function agentChatStream(
   message: string,
   spaceId: string,
-  onEvent: (data: { type: string; data: unknown }) => void
+  onEvent: (data: { type: string; data: unknown }) => void,
+  history?: Array<Record<string, string>>
 ): Promise<void> {
-  await streamSSE("/api/v1/agent/chat/stream", { message, space_id: spaceId }, (dataLine) => {
+  await streamSSE("/api/v1/agent/chat/stream", { message, space_id: spaceId, history }, (dataLine) => {
     if (dataLine === "[DONE]") return;
     try {
       const data = JSON.parse(dataLine);

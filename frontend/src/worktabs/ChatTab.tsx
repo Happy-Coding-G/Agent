@@ -11,10 +11,20 @@ type ToolResult = {
   result?: any;
 };
 
+type SourceItem = {
+  doc_id?: string;
+  title?: string;
+  section?: string;
+  score?: number;
+  source_type?: string;
+  excerpt?: string;
+};
+
 type ChatMessage = {
   role: "user" | "assistant" | "status";
   content: string;
   toolResults?: ToolResult[];
+  sources?: SourceItem[];
 };
 
 const SUGGESTIONS = [
@@ -110,6 +120,17 @@ export default function ChatTab({ tab }: { tab: Tab }) {
 
     let assistantContent = "";
     let toolResults: ToolResult[] = [];
+    let sources: SourceItem[] = [];
+
+    // 构造最近 3 轮对话历史（user + assistant）
+    const history = messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .slice(-6)
+      .map((m) => ({
+        query: m.role === "user" ? m.content : "",
+        answer: m.role === "assistant" ? m.content : "",
+      }))
+      .filter((m) => m.query || m.answer);
 
     try {
       await agentChatStream(query, space.public_id, (event) => {
@@ -119,32 +140,40 @@ export default function ChatTab({ tab }: { tab: Tab }) {
           setMessages((prev) => {
             const last = prev[prev.length - 1];
             if (last?.role === "assistant") {
-              return [...prev.slice(0, -1), { ...last, content: assistantContent, toolResults }];
+              return [...prev.slice(0, -1), { ...last, content: assistantContent, toolResults, sources }];
             }
-            return [...prev, { role: "assistant", content: assistantContent, toolResults }];
+            return [...prev, { role: "assistant", content: assistantContent, toolResults, sources }];
           });
         } else if (event.type === "status") {
           appendStatus(event.data as string);
         } else if (event.type === "intent") {
           appendStatus(`识别意图: ${event.data}`);
+        } else if (event.type === "sources") {
+          const src = event.data as SourceItem[] | undefined;
+          if (src && src.length > 0) {
+            sources = src;
+          }
         } else if (event.type === "result") {
           const data = event.data as Record<string, unknown> | undefined;
           if (data && Array.isArray(data.tool_results)) {
             toolResults = data.tool_results as ToolResult[];
-            setMessages((prev) => {
-              const last = prev[prev.length - 1];
-              if (last?.role === "assistant") {
-                return [...prev.slice(0, -1), { ...last, content: assistantContent || last.content, toolResults }];
-              }
-              return prev;
-            });
           }
+          if (data && Array.isArray(data.sources)) {
+            sources = data.sources as SourceItem[];
+          }
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last?.role === "assistant") {
+              return [...prev.slice(0, -1), { ...last, content: assistantContent || last.content, toolResults, sources }];
+            }
+            return prev;
+          });
         } else if (event.type === "error") {
           const err = event.data as string;
           log(`[Chat] error: ${err}`);
           setMessages((prev) => [...prev, { role: "status", content: `错误: ${err}` }]);
         }
-      });
+      }, history);
     } catch (e: any) {
       log(`[Chat] request failed: ${e?.message ?? String(e)}`);
       setMessages((prev) => [...prev, { role: "status", content: `请求失败: ${e?.message ?? "network error"}` }]);
@@ -152,6 +181,36 @@ export default function ChatTab({ tab }: { tab: Tab }) {
       setStreaming(false);
       setActiveStatus(null);
     }
+  };
+
+  const renderSources = (sources?: SourceItem[]) => {
+    if (!sources || sources.length === 0) return null;
+    return (
+      <div style={{ marginTop: 10 }}>
+        <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>引用来源：</div>
+        <div style={{ display: "grid", gap: 6 }}>
+          {sources.map((s, idx) => (
+            <div
+              key={`${s.doc_id || idx}`}
+              style={{
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                padding: "6px 8px",
+                background: "var(--panel-2)",
+                fontSize: 11,
+              }}
+            >
+              <div style={{ fontWeight: 600, color: "var(--accent)", marginBottom: 2 }}>
+                [{idx + 1}] {s.title || "未知文档"} {s.score !== undefined ? `(score: ${s.score.toFixed(4)})` : ""}
+              </div>
+              {s.excerpt ? (
+                <div style={{ color: "var(--text-muted)", lineHeight: 1.4 }}>{s.excerpt}</div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   };
 
   const renderToolResults = (toolResults?: ToolResult[]) => {
@@ -231,6 +290,7 @@ export default function ChatTab({ tab }: { tab: Tab }) {
                   ) : (
                     msg.content
                   )}
+                  {msg.role === "assistant" && renderSources(msg.sources)}
                   {msg.role === "assistant" && renderToolResults(msg.toolResults)}
                 </div>
               </div>
