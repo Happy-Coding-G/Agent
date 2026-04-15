@@ -22,12 +22,28 @@ class TradeIntent(str, Enum):
     MARKET_ANALYSIS = "market_analysis" # 市场分析
 
 
+class AssetType(str, Enum):
+    """资产类型（向后兼容）"""
+    GENERAL = "general"
+    DIGITAL_ART = "digital_art"
+    KNOWLEDGE_REPORT = "knowledge_report"
+    RAW_DATA = "raw_data"
+
+
 class AutonomyMode(str, Enum):
     """自治模式 - Agent 自主程度"""
     FULL_AUTO = "full_auto"             # 完全自动
     NOTIFY_BEFORE_ACTION = "notify"     # 行动前通知
     REQUIRE_APPROVAL = "approval"       # 需要审批
     MANUAL_STEP = "manual_step"         # 逐步手动
+
+
+class PriceStrategy(str, Enum):
+    """价格策略"""
+    FIXED = "fixed"
+    NEGOTIABLE = "negotiable"
+    AUCTION = "auction"
+    DYNAMIC = "dynamic"
 
 
 class ApprovalPolicy(str, Enum):
@@ -101,6 +117,12 @@ class TradeGoal(BaseModel):
         description="是否要求即时结算"
     )
 
+    # 资产类型
+    asset_type: AssetType = Field(
+        default=AssetType.GENERAL,
+        description="资产类型"
+    )
+
     # 扩展字段
     context: Dict[str, Any] = Field(
         default_factory=dict,
@@ -160,6 +182,10 @@ class TradeConstraints(BaseModel):
         gt=0,
         description="预算上限（购买时使用）"
     )
+    price_strategy: PriceStrategy = Field(
+        default=PriceStrategy.FIXED,
+        description="价格策略"
+    )
     quantity: int = Field(
         default=1,
         ge=1,
@@ -201,17 +227,30 @@ class TradeConstraints(BaseModel):
     )
 
 
+class NegotiationMechanism(str, Enum):
+    """协商机制类型（向后兼容）"""
+    BILATERAL = "bilateral"
+    AUCTION = "auction"
+    DIRECT = "direct"
+
+
+class EngineType(str, Enum):
+    """引擎类型（向后兼容）"""
+    SIMPLE = "simple"
+    EVENT_SOURCED = "event_sourced"
+
+
 class MechanismSelection(BaseModel):
     """
     机制选择结果
 
     由 mechanism_selection_policy 统一决策输出。
     """
-    mechanism_type: Literal["bilateral", "auction", "direct"] = Field(
+    mechanism_type: NegotiationMechanism = Field(
         ...,
         description="选择的机制类型"
     )
-    engine_type: Literal["simple", "event_sourced"] = Field(
+    engine_type: EngineType = Field(
         ...,
         description="引擎类型：简化版或事件溯源版"
     )

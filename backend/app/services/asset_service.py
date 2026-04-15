@@ -118,6 +118,7 @@ class AssetService(SpaceAwareService):
         prompt: str | None,
         user: Users,
         source_asset_ids: list[str] | None = None,
+        asset_origin: str = "space_generated",
     ):
         space = await self._require_space(space_public_id, user)
 
@@ -158,14 +159,15 @@ class AssetService(SpaceAwareService):
             await self._verify_derivative_rights(user, source_asset_ids)
 
         # 3. 总是创建新的数字资产记录（不再 upsert）
+        asset_status = "awaiting_listing_confirmation" if asset_origin == "chat_generated" else "draft"
         asset_id = uuid.uuid4().hex
         db_asset = DataAssets(
             asset_id=asset_id,
             owner_id=user.id,
             asset_name=f"Knowledge Asset {now.isoformat()[:19]}",
             asset_type="knowledge_report",
-            asset_origin="space_generated",
-            asset_status="draft",
+            asset_origin=asset_origin,
+            asset_status=asset_status,
             data_type="knowledge_report",
             sensitivity_level=DataSensitivityLevel.MEDIUM,
             content_markdown=markdown_text,
@@ -239,8 +241,8 @@ class AssetService(SpaceAwareService):
             if src_asset.owner_id == user.id:
                 continue
 
-            # 检查是否存在包含 derivative_right 的活跃权益交易
-            tx_result = await self.db.execute(
+            # 检查所有活跃权益交易中是否有包含 derivative_right 的
+            txs_result = await self.db.execute(
                 select(DataRightsTransactions)
                 .where(
                     and_(
@@ -251,11 +253,13 @@ class AssetService(SpaceAwareService):
                         DataRightsTransactions.valid_until >= now,
                     )
                 )
-                .order_by(DataRightsTransactions.created_at.desc())
-                .limit(1)
             )
-            tx = tx_result.scalar_one_or_none()
-            if not tx or "derivative_right" not in (tx.rights_types or []):
+            transactions = list(txs_result.scalars().all())
+            has_derivative = any(
+                "derivative_right" in (tx.rights_types or [])
+                for tx in transactions
+            )
+            if not has_derivative:
                 raise ServiceError(
                     403,
                     f"No derivative_right for source asset: {src_id}",

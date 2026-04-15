@@ -66,11 +66,16 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
                     prompt=prompt,
                     user=user,
                     source_asset_ids=source_asset_ids,
+                    asset_origin="chat_generated",
                 )
                 return {
                     "success": True,
                     "asset": record,
-                    "message": f"数字资产已生成完毕（{record.get('asset_id')}）。当前状态：{record.get('asset_status')}。",
+                    "message": (
+                        f"数字资产已生成完毕（{record.get('asset_id')}）。"
+                        f"当前状态：{record.get('asset_status')}。"
+                        f"如需上架到交易平台，请告诉我。"
+                    ),
                 }
             else:
                 return {"success": False, "error": f"Unknown action: {action}"}
