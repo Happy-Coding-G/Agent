@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from .state import MainAgentState, AgentType, TaskStatus
 from .prompts import CAPABILITY_ROUTING_SYSTEM_PROMPT
@@ -25,6 +26,18 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # SubAgents (legacy helper, currently retained for QA streaming compatibility)
 # =============================================================================
+
+
+async def _get_user(db: AsyncSession, user_id: Optional[int]) -> Optional["Users"]:
+    """按 user_id 查询 User 对象，找不到返回 None。"""
+    if not user_id:
+        return None
+    from app.db.models import Users
+
+    result = await db.execute(select(Users).where(Users.id == user_id))
+    return result.scalar_one_or_none()
+
+
 class SubAgents:
     def __init__(
         self, db: AsyncSession, llm_client=None, space_path: Optional[str] = None
@@ -34,6 +47,7 @@ class SubAgents:
         self._space_path = space_path
         self._agents: Dict[AgentType, Any] = {}
         self._graphs: Dict[AgentType, Any] = {}
+        self._handlers: Dict[AgentType, Any] = {}  # 注册表：AgentType → handler
         self._initialized = False
 
     def _lazy_init(self):
@@ -65,6 +79,18 @@ class SubAgents:
 
             self._agents[AgentType.TRADE] = TradeAgent(self._db)
             self._graphs[AgentType.TRADE] = self._agents[AgentType.TRADE].graph
+
+            # 注册各 AgentType 的调用处理器（注册表模式）。
+            # 新增 Agent 需要：1) import, 2) 实例化并加入 _agents/_graphs,
+            # 3) 编写 _invoke_xxx handler, 4) 在此注册。
+            self._handlers = {
+                AgentType.FILE_QUERY: self._invoke_file_query,
+                AgentType.QA: self._invoke_qa,
+                AgentType.REVIEW: self._invoke_review,
+                AgentType.ASSET_ORGANIZE: self._invoke_asset_organize,
+                AgentType.TRADE: self._invoke_trade,
+                AgentType.CHAT: self._invoke_chat,
+            }
 
             self._initialized = True
             logger.info("All sub-agents initialized successfully")
@@ -682,14 +708,7 @@ class MainAgent:
         state: MainAgentState,
         top_k: int = 5,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        from app.db.models import Users
-        from sqlalchemy import select
-
-        user = None
-        user_id = state.get("user_id")
-        if user_id:
-            result = await self._db.execute(select(Users).where(Users.id == user_id))
-            user = result.scalar_one_or_none()
+        user = await _get_user(self._db, state.get("user_id"))
 
         if not user:
             yield {"type": "error", "data": "User not found"}

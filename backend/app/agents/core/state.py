@@ -61,19 +61,7 @@ class SubAgentInput(TypedDict, total=False):
     space_id: Optional[str]  # Space public ID for permission filtering
     user_id: Optional[int]  # Current user ID
     top_k: int  # Number of results to retrieve (for QA)
-    source_type: str  # Source type (for data processing)
-    source_path: str  # Source path/identifier
-    doc_id: str  # Document ID (for review)
-    asset_ids: List[str]  # Asset IDs (for asset organization)
-    # Trade-specific fields
-    action: str  # Trade action type
-    listing_id: Optional[str]
-    budget_max: float
-    bid_amount: float
-    pricing_strategy: str
-    reserve_price: float
-    mechanism_hint: str
-    # Generic extension field
+    # Generic extension field for SubAgent-specific params
     extra: Optional[Dict[str, Any]]
 
 

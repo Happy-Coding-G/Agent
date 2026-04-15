@@ -7,7 +7,6 @@ Trade Services Package - Phase 2
 from app.services.trade.trade_negotiation_service import TradeNegotiationService
 from app.services.trade.trade_agent_service import TradeAgentService
 from app.services.trade.trade_service import TradeService
-from app.services.trade.unified_trade_service import UnifiedTradeService
 from app.services.trade.negotiation_event_store import NegotiationEventStore
 from app.services.trade.event_sourcing_blackboard import (
     StateProjector,
@@ -63,7 +62,6 @@ __all__ = [
     # 核心服务
     "TradeService",
     "TradeAgentService",
-    "UnifiedTradeService",
     "TradeNegotiationService",
     "NegotiationEventStore",
     "DataRightsService",

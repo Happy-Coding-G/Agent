@@ -23,7 +23,7 @@ from app.schemas.schemas import (
     AgentTaskResponse,
 )
 from app.services.base import get_llm_client
-from app.agents.core import MainAgent
+from app.agents.core import MainAgent, AgentType
 from app.core.config import settings
 from app.db.models import AgentTasks, Spaces
 
