@@ -73,6 +73,9 @@ class DataLineageType(PyEnum):
     IMPORT = "import"
     TRANSFORM = "transform"
     DERIVED = "derived"
+    FILE = "file"
+    ASSET = "asset"
+    KNOWLEDGE = "knowledge"
 
 
 identity_type_enum = Enum("password", "phone", "wechat", "github", name="identity_type")
@@ -2375,6 +2378,16 @@ class DataAssets(Base):
     updated_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc),
                         onupdate=lambda: datetime.datetime.now(datetime.timezone.utc))
 
+    # 知识资产扩展字段
+    space_public_id = Column(String(32), nullable=True)
+    asset_type = Column(String(32), default="knowledge")
+    content_markdown = Column(Text, nullable=True)
+    content_summary = Column(String(500), nullable=True)
+    graph_snapshot = Column(JSONB, default=dict)
+    generation_prompt = Column(Text, nullable=True)
+    source_document_ids = Column(JSONB, default=list)
+    source_asset_ids = Column(JSONB, default=list)
+
     owner = relationship("Users", back_populates="data_assets")
     rights_transactions = relationship("DataRightsTransactions", back_populates="data_asset")
 
@@ -2383,6 +2396,7 @@ class DataAssets(Base):
         Index("ix_data_assets_sensitivity", "sensitivity_level"),
         Index("ix_data_assets_type", "data_type"),
         Index("ix_data_assets_quality", "quality_overall_score"),
+        Index("ix_data_assets_space", "space_public_id"),
     )
 
 

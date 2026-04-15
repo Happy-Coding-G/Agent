@@ -20,10 +20,12 @@ class AssetManageInput(BaseModel):
     space_id: str = Field(description="空间public_id")
     asset_id: Optional[str] = Field(None, description="资产ID（get时使用）")
     prompt: Optional[str] = Field(None, description="生成提示（generate时使用）")
+    source_asset_ids: Optional[List[str]] = Field(None, description="来源资产ID列表（generate时使用）")
 
 
 class AssetOrganizeInput(BaseModel):
     asset_ids: List[str] = Field(description="要整理的资产ID列表")
+    space_id: str = Field(description="空间public_id")
 
 
 def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
@@ -35,6 +37,7 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
         space_id: str,
         asset_id: Optional[str] = None,
         prompt: Optional[str] = None,
+        source_asset_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         from app.services.asset_service import AssetService
         from app.core.errors import ServiceError
@@ -54,6 +57,7 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
                     space_public_id=space_id,
                     prompt=prompt,
                     user=user,
+                    source_asset_ids=source_asset_ids,
                 )
                 return {"success": True, "asset": record}
             else:
@@ -64,10 +68,10 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
             logger.exception(f"asset_manage failed: {e}")
             return {"success": False, "error": str(e)}
 
-    async def asset_organize(asset_ids: List[str]) -> Dict[str, Any]:
+    async def asset_organize(asset_ids: List[str], space_id: str) -> Dict[str, Any]:
         from app.agents.subagents.asset_organize_agent import AssetOrganizeAgent
         agent = AssetOrganizeAgent(db)
-        return await agent.run(asset_ids)
+        return await agent.run(asset_ids=asset_ids, space_id=space_id, user=user)
 
     return [
         StructuredTool.from_function(

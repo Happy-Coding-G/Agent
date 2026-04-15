@@ -190,6 +190,7 @@ class ChatRequest(BaseModel):
 
 class AssetGenerateRequest(BaseModel):
     prompt: Optional[str] = None
+    source_asset_ids: Optional[List[str]] = Field(default=None)
 
 
 class AssetSummary(BaseModel):
@@ -209,6 +210,11 @@ class AssetDetail(BaseModel):
     prompt: str
     content_markdown: str
     graph_snapshot: dict
+    asset_type: Optional[str] = None
+    data_type: Optional[str] = None
+    sensitivity_level: Optional[str] = None
+    quality_overall_score: Optional[float] = None
+    lineage_root: Optional[str] = None
 
 
 class TradeCreateListingRequest(BaseModel):

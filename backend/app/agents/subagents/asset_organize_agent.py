@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.core import AssetOrganizeState
 from app.core.config import settings
+from app.db.models import Users
 from app.services.asset_service import AssetService
 from app.services.base import get_llm_client
 
@@ -58,6 +59,7 @@ class AssetOrganizeAgent:
     async def _load_assets_node(self, state: AssetOrganizeState) -> AssetOrganizeState:
         """Load assets to be organized."""
         asset_ids = state.get("asset_ids", [])
+        space_id = state.get("space_id", "")
 
         if not asset_ids:
             state["asset_ids"] = []
@@ -65,9 +67,19 @@ class AssetOrganizeAgent:
             return state
 
         try:
-            # TODO: Implement asset loading from state store or database
-            # Assets model doesn't exist yet, so we skip loading for now
-            assets = [{"asset_id": str(aid), "name": f"Asset {aid}"} for aid in asset_ids]
+            assets = []
+            user = state.get("user")
+            for aid in asset_ids:
+                try:
+                    asset = await self.asset_service.get_asset(space_id, aid, user)
+                    assets.append({
+                        "asset_id": aid,
+                        "name": asset.get("title", f"Asset {aid}"),
+                        "content": asset.get("content_markdown", ""),
+                        "category": asset.get("asset_type", "knowledge_report"),
+                    })
+                except Exception:
+                    pass
 
             state["asset_ids"] = [a["asset_id"] for a in assets]
             state["clustering_result"] = {"assets_loaded": len(assets), "assets": assets}
@@ -372,18 +384,27 @@ class AssetOrganizeAgent:
         state["publication_ready"] = publication_ready
         return state
 
-    async def run(self, asset_ids: list[str]) -> dict[str, Any]:
+    async def run(
+        self,
+        asset_ids: list[str],
+        space_id: str,
+        user: Users,
+    ) -> dict[str, Any]:
         """
         Run the asset organization pipeline.
 
         Args:
             asset_ids: List of asset IDs to organize
+            space_id: Space public ID
+            user: Current user
 
         Returns:
             Dict containing organization results
         """
         initial_state: AssetOrganizeState = {
             "asset_ids": asset_ids,
+            "space_id": space_id,
+            "user": user,
             "clustering_result": {},
             "graph_updates": [],
             "summary_report": None,

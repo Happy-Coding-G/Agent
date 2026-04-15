@@ -4,15 +4,15 @@ import datetime
 import uuid
 from typing import Any, TypedDict
 
-from sqlalchemy import select
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.errors import ServiceError
-from app.db.models import Documents, Users
+from app.db.models import DataAssets, DataLineageType, DataSensitivityLevel, Documents, Users
 from app.services.base import SpaceAwareService, get_llm_client, preview_text
 from app.services.graph.graph_service import KnowledgeGraphService
-from app.utils.state_store import load_state, save_state
+from app.services.lineage_service import LineageEventType, LineageService
 
 
 class AssetWorkflowState(TypedDict):
@@ -25,42 +25,79 @@ class AssetWorkflowState(TypedDict):
 
 
 class AssetService(SpaceAwareService):
-    """资产服务 - 继承 SpaceAwareService"""
+    """资产服务 - 继承 SpaceAwareService，统一使用 data_assets 表"""
 
     def __init__(self, db: AsyncSession):
         super().__init__(db)
         self.graph_service = KnowledgeGraphService(db)
 
-    def _load_assets(self, space_public_id: str) -> list[dict[str, Any]]:
-        assets = load_state("assets", space_public_id, [])
-        return assets if isinstance(assets, list) else []
-
-    def _save_assets(self, space_public_id: str, items: list[dict[str, Any]]) -> None:
-        save_state("assets", space_public_id, items)
+    def _db_asset_to_dict(self, asset: DataAssets) -> dict[str, Any]:
+        return {
+            "asset_id": asset.asset_id,
+            "space_public_id": asset.space_public_id or "",
+            "title": asset.asset_name,
+            "summary": asset.content_summary or "",
+            "created_at": asset.created_at.isoformat() if asset.created_at else "",
+            "updated_at": asset.updated_at.isoformat() if asset.updated_at else "",
+            "prompt": asset.generation_prompt or "",
+            "content_markdown": asset.content_markdown or "",
+            "graph_snapshot": asset.graph_snapshot or {},
+            "asset_type": asset.asset_type,
+            "data_type": asset.data_type,
+            "sensitivity_level": asset.sensitivity_level.value if asset.sensitivity_level else None,
+            "quality_overall_score": asset.quality_overall_score,
+            "lineage_root": asset.lineage_root,
+        }
 
     async def list_assets(self, space_public_id: str, user: Users):
         await self._require_space(space_public_id, user)
-        assets = self._load_assets(space_public_id)
+
+        result = await self.db.execute(
+            select(DataAssets)
+            .where(
+                and_(
+                    DataAssets.space_public_id == space_public_id,
+                    DataAssets.owner_id == user.id,
+                )
+            )
+            .order_by(DataAssets.created_at.desc())
+        )
+        db_assets = result.scalars().all()
+
         return [
             {
-                "asset_id": item.get("asset_id"),
-                "title": item.get("title"),
-                "created_at": item.get("created_at"),
-                "summary": item.get("summary"),
+                "asset_id": a.asset_id,
+                "title": a.asset_name,
+                "created_at": a.created_at.isoformat() if a.created_at else "",
+                "summary": a.content_summary or "",
             }
-            for item in reversed(assets)
+            for a in db_assets
         ]
 
     async def get_asset(self, space_public_id: str, asset_id: str, user: Users):
         await self._require_space(space_public_id, user)
-        assets = self._load_assets(space_public_id)
-        for item in assets:
-            if item.get("asset_id") == asset_id:
-                return item
+
+        result = await self.db.execute(
+            select(DataAssets).where(
+                and_(
+                    DataAssets.asset_id == asset_id,
+                    DataAssets.owner_id == user.id,
+                )
+            )
+        )
+        db_asset = result.scalar_one_or_none()
+        if db_asset:
+            return self._db_asset_to_dict(db_asset)
+
         raise ServiceError(404, "Asset not found")
 
     async def generate_asset(
-        self, *, space_public_id: str, prompt: str | None, user: Users
+        self,
+        *,
+        space_public_id: str,
+        prompt: str | None,
+        user: Users,
+        source_asset_ids: list[str] | None = None,
     ):
         space = await self._require_space(space_public_id, user)
         docs = await self._list_docs(space.id)
@@ -81,28 +118,68 @@ class AssetService(SpaceAwareService):
         if not markdown_text:
             raise ServiceError(500, "Asset generation returned empty content")
 
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        now = datetime.datetime.now(datetime.timezone.utc)
         asset_id = uuid.uuid4().hex
         summary = preview_text(markdown_text, max_length=180)
-        record = {
-            "asset_id": asset_id,
-            "space_public_id": space_public_id,
-            "title": f"Knowledge Asset {now[:19]}",
-            "summary": summary,
-            "created_at": now,
-            "updated_at": now,
-            "prompt": result.get("prompt") or "",
-            "content_markdown": markdown_text,
-            "graph_snapshot": {
-                "node_count": len(result.get("graph_nodes", [])),
-                "edge_count": len(result.get("graph_edges", [])),
-            },
+        graph_snapshot = {
+            "node_count": len(result.get("graph_nodes", [])),
+            "edge_count": len(result.get("graph_edges", [])),
         }
+        title = f"Knowledge Asset {now.isoformat()[:19]}"
 
-        assets = self._load_assets(space_public_id)
-        assets.append(record)
-        self._save_assets(space_public_id, assets)
-        return record
+        source_document_ids = [doc["doc_id"] for doc in docs]
+
+        db_asset = DataAssets(
+            asset_id=asset_id,
+            owner_id=user.id,
+            asset_name=title,
+            asset_type="knowledge_report",
+            data_type="knowledge_report",
+            sensitivity_level=DataSensitivityLevel.MEDIUM,
+            content_markdown=markdown_text,
+            content_summary=summary,
+            graph_snapshot=graph_snapshot,
+            generation_prompt=result.get("prompt") or "",
+            space_public_id=space_public_id,
+            source_document_ids=source_document_ids,
+            source_asset_ids=source_asset_ids or [],
+            raw_data_source="space_documents_and_knowledge_graph",
+            storage_location=f"db://data_assets/{asset_id}",
+            is_available_for_trade=True,
+        )
+        self.db.add(db_asset)
+        await self.db.commit()
+        await self.db.refresh(db_asset)
+
+        lineage_service = LineageService(self.db)
+
+        for doc_id in source_document_ids:
+            await lineage_service.record_lineage(
+                entity_type=DataLineageType.KNOWLEDGE,
+                entity_id=asset_id,
+                event_type=LineageEventType.DERIVED,
+                source_entity_type=DataLineageType.FILE,
+                source_entity_id=str(doc_id),
+                user_id=user.id,
+                space_id=space_public_id,
+                metadata={"generation_type": "knowledge_asset", "prompt": prompt or ""},
+                transformation_logic="LLM-generated report from documents and knowledge graph",
+            )
+
+        for src_asset_id in (source_asset_ids or []):
+            await lineage_service.record_lineage(
+                entity_type=DataLineageType.ASSET,
+                entity_id=asset_id,
+                event_type=LineageEventType.DERIVED,
+                source_entity_type=DataLineageType.ASSET,
+                source_entity_id=src_asset_id,
+                user_id=user.id,
+                space_id=space_public_id,
+                metadata={"generation_type": "knowledge_asset_derived"},
+                transformation_logic="Derived knowledge asset from source assets",
+            )
+
+        return self._db_asset_to_dict(db_asset)
 
     async def _list_docs(self, space_db_id: int) -> list[dict[str, Any]]:
         q = await self.db.execute(
