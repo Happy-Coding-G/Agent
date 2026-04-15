@@ -576,12 +576,12 @@ class TradeRepository:
         await self._db.refresh(tx)
         return tx
 
-    async def get_active_rights_transaction(
+    async def list_active_rights_transactions(
         self,
         buyer_id: int,
         data_asset_id: str,
-    ) -> Optional[DataRightsTransactions]:
-        """Get active rights transaction for a buyer and asset."""
+    ) -> List[DataRightsTransactions]:
+        """List all active rights transactions for a buyer and asset."""
         now = datetime.now(timezone.utc)
         stmt = (
             select(DataRightsTransactions)
@@ -593,10 +593,9 @@ class TradeRepository:
                 DataRightsTransactions.valid_until >= now,
             )
             .order_by(DataRightsTransactions.created_at.desc())
-            .limit(1)
         )
         result = await self._db.execute(stmt)
-        return result.scalar_one_or_none()
+        return list(result.scalars().all())
 
     async def check_rights(
         self,
@@ -604,12 +603,20 @@ class TradeRepository:
         data_asset_id: str,
         required_right: str,
     ) -> bool:
-        """Check if buyer has a specific active right on an asset."""
-        tx = await self.get_active_rights_transaction(buyer_id, data_asset_id)
-        if not tx:
+        """Check if buyer has a specific active right on an asset.
+
+        Searches across ALL active rights transactions (not just the latest),
+        because a buyer may hold multiple rights packages for the same asset.
+        """
+        transactions = await self.list_active_rights_transactions(
+            buyer_id, data_asset_id
+        )
+        if not transactions:
             return False
-        rights = tx.rights_types or []
-        return required_right in rights
+        return any(
+            required_right in (tx.rights_types or [])
+            for tx in transactions
+        )
 
     # ==========================================================================
     # Yield Operations

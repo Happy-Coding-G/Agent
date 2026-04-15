@@ -30,7 +30,21 @@ from app.schemas.trade_goal import (
     MechanismSelection,
     TradeIntent,
     AutonomyMode,
+    NegotiationMechanism,
+    EngineType,
 )
+
+# Backward-compatible re-exports
+__all__ = [
+    "MechanismSelectionPolicy",
+    "select_mechanism",
+    "MechanismSelection",
+    "NegotiationMechanism",
+    "EngineType",
+    "MarketContext",
+    "RiskContext",
+    "SelectionInput",
+]
 
 logger = logging.getLogger(__name__)
 

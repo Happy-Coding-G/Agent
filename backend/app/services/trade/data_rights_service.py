@@ -202,13 +202,15 @@ class DataRightsService:
         )
         events = result.scalars().all()
 
+        # 注意：raw_data 不再作为可交易资产展示。
+        # 可交易资产统一由 DataAssets 表承载（knowledge_report 等生成型资产）。
         return [
             {
                 "asset_id": e.session_id,
                 "asset_name": e.payload.get("asset_name", ""),
                 "data_type": e.payload.get("data_type", ""),
                 "asset_type": "raw_data",
-                "is_available_for_trade": True,
+                "is_available_for_trade": False,
             }
             for e in events
         ]

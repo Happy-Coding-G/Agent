@@ -197,7 +197,7 @@ async def agent_chat_stream(
     )
 
     await db.commit()
-    # 注意：不在此处主动关闭 db，由 FastAPI 请求生命周期自动管理
+    await db.close()
 
     task_public_id = task.public_id
     final_result = {}

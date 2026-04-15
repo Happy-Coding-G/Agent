@@ -10,7 +10,7 @@ MainAgent 负责做 capability routing：
 import json
 import logging
 import uuid
-from typing import AsyncGenerator, Dict, Any, Optional
+from typing import AsyncGenerator, Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
