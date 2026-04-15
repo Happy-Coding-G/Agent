@@ -19,6 +19,11 @@ input_schema:
       maximum: 20
       default: 5
       description: 检索条数
+    conversation_history:
+      type: array
+      description: 多轮对话历史（可选）
+      items:
+        type: object
   required:
     - query
     - space_id

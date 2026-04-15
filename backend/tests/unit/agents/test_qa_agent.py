@@ -2,13 +2,14 @@
 
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.agents.subagents.qa_agent import QAAgent
+from app.agents.core.main_agent import MainAgent, AgentType
 
 
 @pytest.fixture
@@ -24,6 +25,14 @@ def mock_db_session():
 @pytest.fixture
 def agent(mock_db_session):
     return QAAgent(mock_db_session)
+
+
+class TestQAAgentInitialization:
+    def test_can_instantiate_without_errors(self, mock_db_session):
+        """回归测试：QAAgent 应能正常实例化（验证 threading 导入已修复）。"""
+        qa = QAAgent(mock_db_session)
+        assert qa is not None
+        assert qa.graph is not None
 
 
 class TestQAAgentHelpers:
@@ -118,3 +127,65 @@ class TestQAAgentHelpers:
 
         assert len(result["hybrid_results"]) == 2
         assert [item["doc_id"] for item in result["hybrid_results"]] == ["doc-1", "doc-2"]
+
+
+class TestMainAgentIntentRouting:
+    def test_natural_questions_route_to_qa(self):
+        """回归测试：常见自然问法应被正确路由到 QA。"""
+        agent = MainAgent(db=MagicMock())
+        cases = [
+            ("请解释 DistMult", AgentType.QA),
+            ("RotatE 是什么", AgentType.QA),
+            ("DistMult 和 ComplEx 的区别", AgentType.QA),
+            ("how does graph search work", AgentType.QA),
+            ("what is the difference between A and B", AgentType.QA),
+            ("查找文件", AgentType.FILE_QUERY),
+            ("审查文档", AgentType.REVIEW),
+            ("你好", AgentType.CHAT),
+        ]
+        for text, expected in cases:
+            assert agent._simple_intent_detection(text) == expected, f"Failed for: {text}"
+
+
+class TestQAAgentGraphRouting:
+    def test_has_retrieval_results_branch(self, agent):
+        """回归测试：no_results 条件边在图中真实生效。"""
+        state_with = {"hybrid_results": [{"doc_id": "d1"}]}
+        state_empty = {"hybrid_results": []}
+        assert agent._has_retrieval_results(state_with) == "has_results"
+        assert agent._has_retrieval_results(state_empty) == "empty"
+
+    @pytest.mark.asyncio
+    async def test_no_results_answer_node(self, agent):
+        """回归测试：空结果节点返回默认兜底回答。"""
+        state = {"hybrid_results": [], "answer": None}
+        result = await agent._no_results_answer_node(state)
+        assert "没有找到与您问题相关的文档内容" in result["answer"]
+
+
+class TestQAAgentHistoryPassing:
+    @pytest.mark.asyncio
+    async def test_run_accepts_conversation_history(self, agent, monkeypatch):
+        """回归测试：run() 能正确接收并透传 conversation_history。"""
+        monkeypatch.setattr(
+            agent, "_require_space", AsyncMock(return_value=MagicMock())
+        )
+        mock_graph = MagicMock()
+        mock_graph.ainvoke = AsyncMock(return_value={
+            "answer": "test",
+            "sources": [],
+            "vector_results": [],
+            "graph_results": [],
+            "hybrid_results": [],
+        })
+        agent.graph = mock_graph
+
+        history = [{"query": "之前的问题", "answer": "之前的回答"}]
+        result = await agent.run(
+            query="后续问题",
+            space_public_id="space-1",
+            user=MagicMock(id=1),
+            conversation_history=history,
+        )
+        call_args = mock_graph.ainvoke.call_args[0][0]
+        assert call_args["conversation_history"] == history

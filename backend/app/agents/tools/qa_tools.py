@@ -19,13 +19,21 @@ class QAAnswerInput(BaseModel):
     query: str = Field(description="用户问题")
     space_id: str = Field(description="空间public_id")
     top_k: int = Field(default=5, description="检索结果数量")
+    conversation_history: Optional[List[Dict[str, str]]] = Field(
+        default=None, description="多轮对话历史"
+    )
 
 
 def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
     db = registry.db
     user = registry.user
 
-    async def qa_answer(query: str, space_id: str, top_k: int = 5) -> Dict[str, Any]:
+    async def qa_answer(
+        query: str,
+        space_id: str,
+        top_k: int = 5,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict[str, Any]:
         from app.agents.subagents.qa_agent import QAAgent
         agent = QAAgent(db)
         return await agent.run(
@@ -33,6 +41,7 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
             space_public_id=space_id,
             user=user,
             top_k=top_k,
+            conversation_history=conversation_history,
         )
 
     return [
