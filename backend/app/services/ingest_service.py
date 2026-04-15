@@ -5,7 +5,7 @@ Ingest 服务
 
 import logging
 import uuid
-from typing import Tuple
+from typing import Optional, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,7 +35,7 @@ class IngestService:
         file_id: int,
         file_version_id: int,
         object_key: str,
-        source_url: str,
+        source_url: Optional[str] = None,
         created_by: int,
     ) -> Tuple[Documents, IngestJobs]:
         """创建 Ingest 实体（文档和任务）"""
@@ -72,17 +72,17 @@ class IngestService:
         """
         从文件版本创建 Ingest Job
 
-        创建文档记录和任务记录，然后提交到 Celery 任务队列
+        创建文档记录和任务记录。
+        注意：Celery 任务投递必须由调用方在数据库事务提交之后显式执行，
+        以避免 worker 在事务尚未提交时就开始读取数据库。
         """
-        source_url = get_minio_service().get_download_url(object_key)
-
         if self.db.in_transaction():
             doc, job = await self._create_ingest_entities(
                 space_id=space_id,
                 file_id=file_id,
                 file_version_id=file_version_id,
                 object_key=object_key,
-                source_url=source_url,
+                source_url=None,
                 created_by=created_by,
             )
         else:
@@ -92,19 +92,9 @@ class IngestService:
                     file_id=file_id,
                     file_version_id=file_version_id,
                     object_key=object_key,
-                    source_url=source_url,
+                    source_url=None,
                     created_by=created_by,
                 )
-
-        # 提交到 Celery 任务队列
-        try:
-            task_id = self.submit_ingest_job(str(job.ingest_id))
-            logger.info(
-                f"[IngestService] Submitted job {job.ingest_id} to Celery, task_id: {task_id}"
-            )
-        except Exception as e:
-            logger.error(f"[IngestService] Failed to submit job to Celery: {e}")
-            # 即使提交失败，也返回 job，让上层决定如何处理
 
         return doc, job
 
