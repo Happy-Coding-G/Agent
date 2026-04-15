@@ -7,38 +7,15 @@ import logging
 import uuid
 from typing import Optional
 
-from celery import Task
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.celery_config import celery_app
-from app.db.models import IngestJobs
 from app.db.session import AsyncSessionLocal
 from app.ai.ingest_pipeline import LangChainIngestPipeline
 
 logger = logging.getLogger(__name__)
 
 
-class IngestTask(Task):
-    """Ingest 任务基类，提供数据库会话管理"""
-
-    _db: Optional[AsyncSession] = None
-
-    async def get_db(self) -> AsyncSession:
-        """获取数据库会话"""
-        if self._db is None:
-            self._db = AsyncSessionLocal()
-        return self._db
-
-    async def after_return(self, status, retval, task_id, args, kwargs, einfo):
-        """任务完成后关闭数据库会话"""
-        if self._db is not None:
-            await self._db.close()
-            self._db = None
-
-
 @celery_app.task(
     bind=True,
-    base=IngestTask,
     name="app.tasks.ingest_tasks.process_ingest_job",
     queue="ingest",
     max_retries=3,
@@ -46,7 +23,7 @@ class IngestTask(Task):
     time_limit=3600,  # 1 小时
     soft_time_limit=3000,  # 50 分钟
 )
-def process_ingest_job(self: IngestTask, ingest_id: str):
+def process_ingest_job(self, ingest_id: str):
     """
     处理 Ingest Job 的 Celery 任务
 
@@ -119,7 +96,7 @@ async def _mark_job_failed(ingest_id: str, error_message: str):
 
             if job:
                 job.status = "failed"
-                job.error_message = error_message
+                job.error = error_message
                 await session.commit()
                 logger.info(f"[Celery] Marked job as failed: {ingest_id}")
         except Exception as e:

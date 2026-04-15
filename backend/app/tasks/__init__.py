@@ -16,30 +16,6 @@ class DatabaseTask(Task):
         pass
 
 
-# ==================== 文档处理任务 ====================
-
-
-@celery_app.task(
-    bind=True,
-    base=DatabaseTask,
-    name="app.tasks.ingest_tasks.process_ingest_job",
-    queue="ingest",
-    max_retries=3,
-)
-def process_ingest_job(self, ingest_id: str):
-    """处理文档摄取任务"""
-    from app.tasks.ingest_tasks import _run_ingest_pipeline
-    import asyncio
-
-    try:
-        result = asyncio.run(_run_ingest_pipeline(ingest_id))
-        return {"status": "success", "ingest_id": ingest_id, "result": result}
-    except Exception as exc:
-        if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
-        return {"status": "failed", "ingest_id": ingest_id, "error": str(exc)}
-
-
 # ==================== 导出任务 ====================
 
 
@@ -292,8 +268,6 @@ def generate_space_report(self, space_id: str, report_type: str = "weekly"):
 # ==================== 任务注册表 ====================
 
 TASK_REGISTRY = {
-    # 文档处理
-    "process_ingest_job": process_ingest_job,
     # 导出
     "export_documents": export_documents,
     # 通知

@@ -169,7 +169,7 @@ class IngestService:
             return False
 
         # 如果任务已完成或已失败，无需取消
-        if job.status in ["completed", "failed", "cancelled"]:
+        if job.status in ["succeeded", "failed", "cancelled"]:
             return False
 
         # 撤销 Celery 任务
@@ -183,21 +183,3 @@ class IngestService:
             logger.info(f"[IngestService] Cancelled job: {ingest_id}")
 
         return revoked
-
-
-# 向后兼容的函数（用于代码迁移期）
-def spawn_ingest_job(ingest_id: uuid.UUID):
-    """
-    提交 Ingest Job（向后兼容）
-
-    使用 Celery 任务队列替代原来的 asyncio.create_task
-    """
-    try:
-        task_id = task_manager.submit_ingest_job(str(ingest_id))
-        logger.info(
-            f"[spawn_ingest_job] Submitted job {ingest_id} to Celery, task_id: {task_id}"
-        )
-        return task_id
-    except Exception as e:
-        logger.error(f"[spawn_ingest_job] Failed to submit job: {e}")
-        raise

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 TASK_STATUS_MAP = {
     PENDING: "queued",
     STARTED: "running",
-    SUCCESS: "completed",
+    SUCCESS: "succeeded",
     FAILURE: "failed",
     RETRY: "retrying",
 }
