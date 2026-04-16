@@ -146,6 +146,54 @@ class TestMainAgentIntentRouting:
         for text, expected in cases:
             assert agent._simple_intent_detection(text) == expected, f"Failed for: {text}"
 
+    def test_writing_and_summarizing_routes_to_chat(self):
+        """回归测试：写作/总结类请求不应被误判为 QA。"""
+        agent = MainAgent(db=MagicMock())
+        cases = [
+            ("帮我总结今天的工作", AgentType.CHAT),
+            ("写一个周报开头", AgentType.CHAT),
+            ("翻译这段文字", AgentType.CHAT),
+            ("生成一份报告", AgentType.CHAT),
+        ]
+        for text, expected in cases:
+            assert agent._simple_intent_detection(text) == expected, f"Failed for: {text}"
+
+
+class TestQAAgentGraphInvoke:
+    @pytest.mark.asyncio
+    async def test_graph_ainvoke_runs_without_invalid_update(self, agent, monkeypatch):
+        """回归测试：graph.ainvoke 真实执行时不应出现并发写入错误。"""
+        monkeypatch.setattr(
+            agent, "_require_space", AsyncMock(return_value=MagicMock())
+        )
+        monkeypatch.setattr(
+            agent, "_retrieve_vector_context", AsyncMock(return_value=[])
+        )
+        monkeypatch.setattr(
+            agent, "_retrieve_graph_context", AsyncMock(return_value=[])
+        )
+
+        initial_state = {
+            "query": "test query",
+            "space_id": "space-1",
+            "user_id": 1,
+            "top_k": 5,
+            "context_items": None,
+            "conversation_history": [],
+            "intent": None,
+            "vector_results": [],
+            "graph_results": [],
+            "hybrid_results": [],
+            "answer": None,
+            "sources": [],
+            "retrieval_debug": {},
+            "error": None,
+        }
+
+        result = await agent.graph.ainvoke(initial_state)
+        assert "answer" in result
+        assert "sources" in result
+
 
 class TestQAAgentGraphRouting:
     def test_has_retrieval_results_branch(self, agent):
@@ -186,6 +234,82 @@ class TestQAAgentHistoryPassing:
             space_public_id="space-1",
             user=MagicMock(id=1),
             conversation_history=history,
+            session_id="sess_qa_1",
         )
         call_args = mock_graph.ainvoke.call_args[0][0]
         assert call_args["conversation_history"] == history
+
+
+class TestQAAgentSessionIdMemory:
+    @pytest.mark.asyncio
+    async def test_stream_with_session_id_persists_memory(self, agent, monkeypatch):
+        """回归测试：stream() 在 session_id 存在时会持久化 QA 记忆。"""
+        monkeypatch.setattr(
+            agent, "_require_space", AsyncMock(return_value=MagicMock())
+        )
+        monkeypatch.setattr(
+            agent, "_classify_query_node", AsyncMock(return_value={"intent": "factual"})
+        )
+        monkeypatch.setattr(
+            agent, "_vector_search_node", AsyncMock(return_value={"vector_results": []})
+        )
+        monkeypatch.setattr(
+            agent, "_graph_search_node", AsyncMock(return_value={"graph_results": []})
+        )
+        monkeypatch.setattr(
+            agent, "_hybrid_merge_node", AsyncMock(return_value={"hybrid_results": []})
+        )
+        monkeypatch.setattr(
+            agent, "_rerank_hybrid_node", AsyncMock(return_value={"hybrid_results": []})
+        )
+
+        persist_mock = AsyncMock()
+        monkeypatch.setattr(agent, "_persist_qa_memory", persist_mock)
+
+        chunks = []
+        async for chunk in agent.stream(
+            query="hello",
+            space_public_id="space-1",
+            user=MagicMock(id=1),
+            session_id="sess_qa_2",
+        ):
+            chunks.append(chunk)
+
+        assert any(c["type"] == "result" for c in chunks)
+        persist_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stream_without_session_id_skips_persistence(self, agent, monkeypatch):
+        """回归测试：stream() 在没有 session_id 时不持久化记忆。"""
+        monkeypatch.setattr(
+            agent, "_require_space", AsyncMock(return_value=MagicMock())
+        )
+        monkeypatch.setattr(
+            agent, "_classify_query_node", AsyncMock(return_value={"intent": "factual"})
+        )
+        monkeypatch.setattr(
+            agent, "_vector_search_node", AsyncMock(return_value={"vector_results": []})
+        )
+        monkeypatch.setattr(
+            agent, "_graph_search_node", AsyncMock(return_value={"graph_results": []})
+        )
+        monkeypatch.setattr(
+            agent, "_hybrid_merge_node", AsyncMock(return_value={"hybrid_results": []})
+        )
+        monkeypatch.setattr(
+            agent, "_rerank_hybrid_node", AsyncMock(return_value={"hybrid_results": []})
+        )
+
+        persist_mock = AsyncMock()
+        monkeypatch.setattr(agent, "_persist_qa_memory", persist_mock)
+
+        chunks = []
+        async for chunk in agent.stream(
+            query="hello",
+            space_public_id="space-1",
+            user=MagicMock(id=1),
+            session_id=None,
+        ):
+            chunks.append(chunk)
+
+        persist_mock.assert_not_called()

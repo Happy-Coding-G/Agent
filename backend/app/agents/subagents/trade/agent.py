@@ -120,6 +120,7 @@ class TradeAgent(SpaceAwareService):
         user: Users,
         task_id: Optional[str] = None,
         space_public_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> TradeExecutionPlan:
         """
         统一交易目标执行入口 (Agent-First 核心)
@@ -162,12 +163,18 @@ class TradeAgent(SpaceAwareService):
 
         if space_public_id:
             initial_state["space_public_id"] = space_public_id
+        if session_id:
+            initial_state["session_id"] = session_id
 
         # 2. 执行完整交易目标图
         try:
             final_state = await self.graph.ainvoke(initial_state)
 
-            # 3. 构建执行计划结果
+            # 3. 同步协商状态到记忆层
+            if session_id:
+                await self._sync_trade_memory(session_id, user, space_public_id, final_state)
+
+            # 4. 构建执行计划结果
             plan = TradeExecutionPlan(
                 plan_id=plan_id,
                 goal=goal,
@@ -207,6 +214,7 @@ class TradeAgent(SpaceAwareService):
         goal: TradeGoal,
         constraints: TradeConstraints,
         user: Users,
+        session_id: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -225,6 +233,7 @@ class TradeAgent(SpaceAwareService):
             goal=goal,
             constraints=constraints,
             user=user,
+            session_id=session_id,
             **kwargs
         )
 
@@ -247,6 +256,7 @@ class TradeAgent(SpaceAwareService):
         action: str,
         space_public_id: str,
         user: Users,
+        session_id: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -274,10 +284,16 @@ class TradeAgent(SpaceAwareService):
             }
 
             # 添加额外参数
+            if session_id:
+                initial_state["session_id"] = session_id
             initial_state.update(kwargs)
 
             # 执行Graph
             final_state = await self.graph.ainvoke(initial_state)
+
+            # 同步协商状态到记忆层
+            if session_id:
+                await self._sync_trade_memory(session_id, user, space_public_id, final_state)
 
             return final_state.get("result", {
                 "success": False,
@@ -694,3 +710,76 @@ class TradeAgent(SpaceAwareService):
     def _sanitize_tags(self, tags: List[str]) -> List[str]:
         """清理标签"""
         return [t.strip()[:32] for t in tags if t.strip()][:10]
+
+    async def _sync_trade_memory(
+        self,
+        session_id: str,
+        user: Users,
+        space_public_id: Optional[str],
+        final_state: Dict[str, Any],
+    ) -> None:
+        """将 Trade 协商状态同步到 L3 Redis 和 L4 PostgreSQL"""
+        try:
+            from app.services.memory import UnifiedMemoryService
+
+            memory = UnifiedMemoryService(
+                db=self.db,
+                user_id=user.id,
+                space_id=space_public_id,
+                session_id=session_id,
+            )
+
+            # L3: shared_board
+            shared_board = {
+                "current_price": final_state.get("calculated_price"),
+                "selected_mechanism": final_state.get("selected_mechanism"),
+                "negotiation_id": final_state.get("negotiation_id"),
+                "plan_id": final_state.get("plan_id"),
+            }
+            await memory.set_working_memory(
+                key="shared_board",
+                value=shared_board,
+                session_id=session_id,
+                agent_type="trade",
+            )
+
+            # L3: approval_state
+            approval_state = {
+                "approval_required": final_state.get("approval_required", False),
+                "approval_status": final_state.get("approval_status"),
+                "pending_decision": final_state.get("pending_decision"),
+            }
+            await memory.set_working_memory(
+                key="approval_state",
+                value=approval_state,
+                session_id=session_id,
+                agent_type="trade",
+            )
+
+            # L4: 记录关键事件
+            if final_state.get("approval_required"):
+                await memory.log_event(
+                    event_type="approval_required",
+                    payload={
+                        "summary": "交易需要审批",
+                        "plan_id": final_state.get("plan_id"),
+                        "pending_decision": final_state.get("pending_decision"),
+                    },
+                    session_id=session_id,
+                    agent_type="trade",
+                )
+
+            await memory.log_event(
+                event_type="trade_offer",
+                payload={
+                    "summary": f"交易执行完成: {final_state.get('current_step')}",
+                    "plan_id": final_state.get("plan_id"),
+                    "success": final_state.get("success", False),
+                    "result_summary": str(final_state.get("result", {}))[:200],
+                },
+                session_id=session_id,
+                agent_type="trade",
+            )
+
+        except Exception as exc:
+            logger.warning(f"Failed to sync trade memory: {exc}")

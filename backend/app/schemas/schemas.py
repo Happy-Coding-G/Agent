@@ -327,11 +327,12 @@ class AgentChatRequest(BaseModel):
 
     message: str = Field(..., min_length=1, description="用户消息")
     space_id: str = Field(..., description="工作空间ID")
+    session_id: Optional[str] = Field(default=None, description="会话ID（为空时后端创建新会话）")
     context: Optional[Dict[str, Any]] = Field(default=None, description="额外上下文")
     stream: bool = Field(default=False, description="是否使用流式响应")
     top_k: int = Field(default=5, ge=1, le=12, description="检索结果数量（仅QA类请求）")
     history: Optional[List[Dict[str, str]]] = Field(
-        default=None, description="最近对话历史（QA场景下用于多轮上下文）"
+        default=None, description="[DEPRECATED] 已由服务端记忆接管，此字段保留仅用于兼容旧客户端"
     )
 
     # 向后兼容：允许使用旧版 query 参数
@@ -346,6 +347,7 @@ class AgentChatResponse(BaseModel):
     success: bool = Field(default=True, description="是否成功")
     intent: Optional[str] = Field(default=None, description="识别到的意图")
     agent_type: str = Field(..., description="处理的Agent类型")
+    session_id: Optional[str] = Field(default=None, description="会话ID")
     result: Dict[str, Any] = Field(default_factory=dict, description="处理结果")
     sources: Optional[List[Dict[str, Any]]] = Field(
         default=None, description="来源引用（包含doc_id, title, score等）"

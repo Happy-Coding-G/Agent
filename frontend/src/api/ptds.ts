@@ -52,11 +52,12 @@ function findFolderById(folders: TreeFolder[], id: number): TreeFolder | null {
 export async function agentChat(
   message: string,
   spaceId: string,
+  sessionId?: string,
   context?: Record<string, unknown>
 ): Promise<AgentChatResponse> {
   return await http<AgentChatResponse>("/api/v1/agent/chat", {
     method: "POST",
-    json: { message, space_id: spaceId, context },
+    json: { message, space_id: spaceId, session_id: sessionId, context },
   });
 }
 
@@ -64,9 +65,9 @@ export async function agentChatStream(
   message: string,
   spaceId: string,
   onEvent: (data: { type: string; data: unknown }) => void,
-  history?: Array<Record<string, string>>
+  sessionId?: string
 ): Promise<void> {
-  await streamSSE("/api/v1/agent/chat/stream", { message, space_id: spaceId, history }, (dataLine) => {
+  await streamSSE("/api/v1/agent/chat/stream", { message, space_id: spaceId, session_id: sessionId }, (dataLine) => {
     if (dataLine === "[DONE]") return;
     try {
       const data = JSON.parse(dataLine);
