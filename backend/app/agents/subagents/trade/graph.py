@@ -22,6 +22,82 @@ from app.agents.subagents.trade.nodes import TradeNodes
 logger = logging.getLogger(__name__)
 
 
+def create_agent_first_trade_graph(db, skills: Dict[str, Any]) -> StateGraph:
+    """
+    创建仅包含 Agent-First 节点的 StateGraph。
+
+    工作流：
+    normalize_goal -> load_user_config -> load_asset_context -> evaluate_market
+    -> evaluate_risk -> select_mechanism -> create_or_resume_session -> run_negotiation_round
+    -> check_approval -> settle_or_continue -> publish_state
+    """
+    nodes = TradeNodes(db, skills)
+
+    builder = StateGraph(TradeState)
+
+    builder.add_node("normalize_goal", RunnableLambda(nodes.normalize_goal))
+    builder.add_node("load_user_config", RunnableLambda(nodes.load_user_config))
+    builder.add_node("load_asset_context", RunnableLambda(nodes.load_asset_context))
+    builder.add_node("evaluate_market", RunnableLambda(nodes.evaluate_market))
+    builder.add_node("evaluate_risk", RunnableLambda(nodes.evaluate_risk))
+    builder.add_node("select_mechanism", RunnableLambda(nodes.select_mechanism))
+    builder.add_node("create_session", RunnableLambda(nodes.create_session))
+    builder.add_node("run_negotiation", RunnableLambda(nodes.run_negotiation))
+    builder.add_node("check_approval", RunnableLambda(nodes.check_approval))
+    builder.add_node("settle_or_continue", RunnableLambda(nodes.settle_or_continue))
+    builder.add_node("publish_state", RunnableLambda(nodes.publish_state))
+    builder.add_node("format_result", RunnableLambda(nodes.format_result))
+
+    def route_after_mechanism(state: TradeState) -> str:
+        mechanism = state.get("mechanism_selection", {}).get("mechanism_type", "bilateral")
+        if mechanism == "direct":
+            return "settle_or_continue"
+        return "create_session"
+
+    def route_after_negotiation(state: TradeState) -> str:
+        if state.get("approval_required"):
+            return "check_approval"
+        status = state.get("result", {}).get("status")
+        if status in ["accepted", "rejected", "cancelled"]:
+            return "settle_or_continue"
+        return "run_negotiation"
+
+    builder.set_entry_point("normalize_goal")
+    builder.add_edge("normalize_goal", "load_user_config")
+    builder.add_edge("load_user_config", "load_asset_context")
+    builder.add_edge("load_asset_context", "evaluate_market")
+    builder.add_edge("evaluate_market", "evaluate_risk")
+    builder.add_edge("evaluate_risk", "select_mechanism")
+
+    builder.add_conditional_edges(
+        "select_mechanism",
+        route_after_mechanism,
+        {
+            "create_session": "create_session",
+            "settle_or_continue": "settle_or_continue",
+        },
+    )
+
+    builder.add_edge("create_session", "run_negotiation")
+
+    builder.add_conditional_edges(
+        "run_negotiation",
+        route_after_negotiation,
+        {
+            "check_approval": "check_approval",
+            "settle_or_continue": "settle_or_continue",
+            "run_negotiation": "run_negotiation",
+        },
+    )
+
+    builder.add_edge("check_approval", "settle_or_continue")
+    builder.add_edge("settle_or_continue", "publish_state")
+    builder.add_edge("publish_state", "format_result")
+    builder.add_edge("format_result", END)
+
+    return builder.compile()
+
+
 def create_trade_graph(db, skills: Dict[str, Any]) -> StateGraph:
     """
     创建交易目标执行的 StateGraph (Agent-First)

@@ -11,7 +11,10 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 
+from sqlalchemy import select, func
+
 from app.agents.subagents.trade.state import TradeState
+from app.db.models import TradeOrders, TradeListings, AgentTasks
 
 logger = logging.getLogger(__name__)
 
@@ -192,10 +195,12 @@ async def evaluate_risk(self, state: TradeState) -> TradeState:
     风险评估
 
     评估交易风险等级，决定是否需要额外审批。
+    使用真实订单数据计算用户信任分数。
     """
     try:
         goal = state.get("trade_goal", {})
         constraints = state.get("trade_constraints", {})
+        user_id = state.get("user_id")
 
         # 计算风险因素
         risk_factors = []
@@ -219,10 +224,40 @@ async def evaluate_risk(self, state: TradeState) -> TradeState:
         if not user_config.get("auto_negotiate", False):
             risk_factors.append("manual_mode")
 
+        # 查询真实订单数据计算信任分
+        completed_orders = 0
+        failed_orders = 0
+        if user_id:
+            try:
+                completed_result = await self.db.execute(
+                    select(func.count()).where(
+                        (TradeOrders.buyer_user_id == user_id) &
+                        (TradeOrders.status == "completed")
+                    )
+                )
+                completed_orders = completed_result.scalar() or 0
+
+                failed_result = await self.db.execute(
+                    select(func.count()).where(
+                        (TradeOrders.buyer_user_id == user_id) &
+                        (TradeOrders.status.in_(["disputed", "refunded"]))
+                    )
+                )
+                failed_orders = failed_result.scalar() or 0
+            except Exception as e:
+                logger.warning(f"Failed to query order stats: {e}")
+
+        is_first_transaction = completed_orders == 0
+        user_trust_score = min(1.0, 0.3 + completed_orders * 0.1)
+        user_trust_score = max(0.0, user_trust_score - failed_orders * 0.15)
+
         risk_context = {
             "risk_level": risk_level,
             "risk_factors": risk_factors,
-            "user_trust_score": 1.0,  # 可从用户历史计算
+            "user_trust_score": user_trust_score,
+            "is_first_transaction": is_first_transaction,
+            "completed_orders": completed_orders,
+            "failed_orders": failed_orders,
             "requires_manual_review": risk_level == "high" or constraints.get("approval_policy") == "always",
         }
 
@@ -235,6 +270,8 @@ async def evaluate_risk(self, state: TradeState) -> TradeState:
         state["decisions"].append({
             "type": "risk_evaluation",
             "risk_level": risk_level,
+            "user_trust_score": user_trust_score,
+            "is_first_transaction": is_first_transaction,
             "requires_manual_review": risk_context["requires_manual_review"],
         })
 
@@ -251,6 +288,7 @@ async def create_session(self, state: TradeState) -> TradeState:
     创建或恢复协商会话
 
     根据选择的机制创建对应的协商会话。
+    根据 goal.intent 和机制类型正确分配 buyer/seller 角色。
     """
     try:
         if not state.get("success"):
@@ -259,6 +297,9 @@ async def create_session(self, state: TradeState) -> TradeState:
         mechanism = state.get("selected_mechanism", "bilateral")
         engine_type = state.get("engine_type", "simple")
         goal = state.get("trade_goal", {})
+        intent = goal.get("intent")
+        user_id = state.get("user_id")
+        listing_id = goal.get("listing_id")
 
         session_id = None
 
@@ -269,13 +310,17 @@ async def create_session(self, state: TradeState) -> TradeState:
             return state
 
         elif engine_type == "simple" or mechanism == "bilateral":
-            # 使用简化版引擎（双边协商）
-            from app.services.trade.simple_negotiation_service import SimpleNegotiationService
+            # 双边协商
+            if intent == "sell_asset":
+                state["success"] = False
+                state["error"] = "Bilateral negotiation can only be initiated by buyer"
+                return state
 
+            from app.services.trade.simple_negotiation_service import SimpleNegotiationService
             service = SimpleNegotiationService(self.db)
             result = await service.create_negotiation(
-                buyer_id=state.get("user_id"),
-                listing_id=goal.get("listing_id"),
+                buyer_id=user_id,
+                listing_id=listing_id,
                 requirements={
                     "max_budget": goal.get("max_price"),
                     "preferred_price": goal.get("target_price"),
@@ -284,16 +329,37 @@ async def create_session(self, state: TradeState) -> TradeState:
             )
             session_id = result.get("negotiation_id")
 
-        else:
-            # 使用事件溯源引擎（拍卖）
+        elif mechanism == "auction":
+            # 拍卖
             from app.services.trade.hybrid_negotiation_service import HybridNegotiationService
+
+            seller_id = None
+            if intent == "sell_asset":
+                seller_id = user_id
+            elif intent == "buy_asset":
+                # 买方发起拍卖购买时，需查询 listing 的真实卖方
+                if listing_id:
+                    listing_result = await self.db.execute(
+                        select(TradeListings).where(TradeListings.public_id == listing_id)
+                    )
+                    listing = listing_result.scalar_one_or_none()
+                    if listing:
+                        seller_id = listing.seller_user_id
+                    else:
+                        state["success"] = False
+                        state["error"] = f"Listing not found: {listing_id}"
+                        return state
+                else:
+                    state["success"] = False
+                    state["error"] = "listing_id is required for auction purchase"
+                    return state
 
             service = HybridNegotiationService(self.db)
             result = await service.create_negotiation(
                 mechanism_type="auction",
-                seller_id=state.get("user_id"),
-                buyer_id=None,
-                listing_id=goal.get("listing_id"),
+                seller_id=seller_id,
+                buyer_id=None if intent == "sell_asset" else user_id,
+                listing_id=listing_id,
                 config={
                     "starting_price": goal.get("min_price", 0),
                     "reserve_price": goal.get("min_price", 0),
@@ -362,35 +428,72 @@ async def check_approval(self, state: TradeState) -> TradeState:
     """
     检查审批门控
 
-    检查是否需要人工审批，并记录审批请求。
+    调用真实审批策略服务，若需要审批则持久化到 AgentTask。
     """
     try:
-        if not state.get("approval_required"):
-            return state
+        goal_dict = state.get("trade_goal", {})
+        constraints_dict = state.get("trade_constraints", {})
+        risk_context = state.get("risk_context", {})
 
-        # 创建审批请求
-        pending_decision = {
-            "type": "approval_required",
-            "step": state.get("current_step"),
-            "reason": state.get("mechanism_selection", {}).get("selection_reason", ""),
-            "requires_action": True,
-            "created_at": datetime.utcnow().isoformat(),
-        }
+        from app.schemas.trade_goal import TradeGoal, TradeConstraints
+        from app.services.trade.approval_policy_service import ApprovalPolicyService
 
-        state["pending_decision"] = pending_decision
-        state["result"] = {
-            "status": "pending_approval",
-            "message": "Waiting for user approval",
-            "decision": pending_decision,
-        }
+        goal = TradeGoal(**goal_dict)
+        constraints = TradeConstraints(**constraints_dict)
 
-        # 记录决策
-        if "decisions" not in state:
-            state["decisions"] = []
-        state["decisions"].append({
-            "type": "approval_requested",
-            "reason": pending_decision["reason"],
-        })
+        decision = ApprovalPolicyService.evaluate_transaction(
+            goal=goal,
+            constraints=constraints,
+            current_price=goal_dict.get("target_price"),
+            user_trust_score=risk_context.get("user_trust_score", 1.0),
+            is_first_transaction=risk_context.get("is_first_transaction", False),
+        )
+
+        if decision.requires_approval:
+            state["approval_required"] = True
+            pending_decision = {
+                "type": "approval_required",
+                "step": state.get("current_step"),
+                "reason": decision.reason,
+                "trigger": decision.trigger.value if decision.trigger else None,
+                "policy_applied": decision.policy_applied,
+                "requires_action": True,
+                "created_at": datetime.utcnow().isoformat(),
+            }
+            state["pending_decision"] = pending_decision
+            state["result"] = {
+                "status": "pending_approval",
+                "message": f"Waiting for user approval: {decision.reason}",
+                "decision": pending_decision,
+            }
+
+            # 持久化到 AgentTask
+            task_id = state.get("task_id")
+            if task_id:
+                try:
+                    task_result = await self.db.execute(
+                        select(AgentTasks).where(AgentTasks.public_id == task_id)
+                    )
+                    task = task_result.scalar_one_or_none()
+                    if task:
+                        task.status = "pending_approval"
+                        existing_output = task.output_data or {}
+                        existing_output["pending_decision"] = pending_decision
+                        task.output_data = existing_output
+                        await self.db.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to persist approval decision: {e}")
+
+            # 记录决策
+            if "decisions" not in state:
+                state["decisions"] = []
+            state["decisions"].append({
+                "type": "approval_requested",
+                "reason": decision.reason,
+                "policy_applied": decision.policy_applied,
+            })
+        else:
+            state["approval_required"] = False
 
         return state
 
@@ -404,10 +507,17 @@ async def settle_or_continue(self, state: TradeState) -> TradeState:
     结算或继续
 
     根据当前状态决定是结算还是继续协商。
+    若存在 pending_approval 但未批准，则阻止结算。
     """
     try:
         result = state.get("result", {})
         status = result.get("status")
+
+        # 检查审批是否通过
+        if state.get("approval_required") and not result.get("approval_granted"):
+            state["success"] = False
+            state["error"] = "Settlement blocked: approval required but not granted"
+            return state
 
         if status in ["accepted", "completed"]:
             # 执行结算

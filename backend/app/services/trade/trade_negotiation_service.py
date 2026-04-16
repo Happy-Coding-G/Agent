@@ -29,6 +29,7 @@ from app.db.models import (
     UserAgentConfig,
 )
 from app.core.errors import ServiceError
+from app.services.trade.trade_service import TradeService
 from app.services.trade.negotiation_event_store import NegotiationEventStore
 from app.services.trade.event_sourcing_blackboard import (
     StateProjector,
@@ -1328,6 +1329,38 @@ class TradeNegotiationService:
 
         # 确定最终价格
         settle_price = final_price or (state.current_price / 100 if state.current_price else 0)
+        actual_buyer_id = buyer_id or session.buyer_user_id
+
+        # 实际扣款和创建订单
+        order_id = None
+        if session.listing_id and actual_buyer_id:
+            from app.db.models import Users
+            from sqlalchemy import select
+
+            buyer_result = await self.db.execute(
+                select(Users).where(Users.id == actual_buyer_id)
+            )
+            buyer_user = buyer_result.scalar_one_or_none()
+            if buyer_user:
+                try:
+                    trade_service = TradeService(self.db)
+                    settlement_result = await trade_service.purchase_negotiated(
+                        listing_id=session.listing_id,
+                        buyer=buyer_user,
+                        agreed_price_credits=settle_price,
+                    )
+                    if settlement_result.get("status") == "completed":
+                        order_id = settlement_result.get("order", {}).get("order_id")
+                    elif settlement_result.get("status") == "already_purchased":
+                        order_id = settlement_result.get("order", {}).get("order_id")
+                    else:
+                        raise ServiceError(500, settlement_result.get("message", "Settlement failed"))
+                except Exception as e:
+                    await self.db.rollback()
+                    logger.error(f"Settlement failed in finalize_settlement: {e}")
+                    raise ServiceError(500, f"Settlement failed: {str(e)}")
+            else:
+                raise ServiceError(404, "Buyer user not found")
 
         # 追加SETTLE事件
         event = await self.event_store.append_event(
@@ -1338,8 +1371,9 @@ class TradeNegotiationService:
             agent_role="seller",
             payload={
                 "final_price": settle_price,
-                "buyer_id": buyer_id or session.buyer_user_id,
+                "buyer_id": actual_buyer_id,
                 "seller_id": session.seller_user_id,
+                "order_id": order_id,
             },
         )
 
@@ -1347,9 +1381,6 @@ class TradeNegotiationService:
         session.status = "settled"
         if not session.agreed_price:
             session.agreed_price = int(settle_price * 100)
-
-        # 创建交易订单和日志（简化版）
-        # TODO: 实际扣款和创建订单
 
         await self.db.commit()
 
