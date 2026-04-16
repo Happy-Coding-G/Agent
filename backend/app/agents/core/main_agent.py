@@ -134,11 +134,16 @@ class SubAgents:
 # =============================================================================
 class MainAgent:
     def __init__(
-        self, db: AsyncSession, llm_client=None, space_path: Optional[str] = None
+        self,
+        db: AsyncSession,
+        llm_client=None,
+        space_path: Optional[str] = None,
+        memory_service: Optional["UnifiedMemoryService"] = None,
     ):
         self._db = db
         self._llm_client = llm_client
         self._space_path = space_path
+        self._memory = memory_service
         self._subagents: Optional[SubAgents] = None
         self._tool_registry = None
         self.graph = self._build_graph()
@@ -244,7 +249,6 @@ class MainAgent:
     def _tool_router(self, state: MainAgentState) -> str:
         if state.get("error"):
             return "error"
-        # If there are pending tool_calls not yet executed, continue planning
         tool_calls = state.get("tool_calls", [])
         tool_results = state.get("tool_results", [])
         if len(tool_results) < len(tool_calls):
@@ -262,7 +266,6 @@ class MainAgent:
         space_id = state.get("space_id")
         user_id = state.get("user_id")
 
-        # Fetch user for tool registry
         user = None
         if user_id:
             from sqlalchemy import select
@@ -282,7 +285,6 @@ class MainAgent:
         subagent_registry = self._get_subagent_registry(user)
         subagent_schemas = subagent_registry.get_subagent_schemas()
 
-        # Try to detect if this is a QA request for streaming passthrough
         intent = self._simple_intent_detection(user_request)
         state["intent"] = intent
 
@@ -358,7 +360,6 @@ class MainAgent:
         user_request = state.get("user_request", "")
         space_id = state.get("space_id")
 
-        # QA and chat go direct
         if intent in (AgentType.QA, AgentType.CHAT):
             state["active_tool"] = None
             state["final_answer"] = None
@@ -431,7 +432,6 @@ class MainAgent:
     def _simple_intent_detection(self, text: str) -> AgentType:
         text_lower = text.lower().strip()
 
-        # 1. 显式命中专用代理时直接路由
         if (
             any(kw in text_lower for kw in ["查看", "查找", "搜索", "目录"])
             or "文件" in text_lower
@@ -447,14 +447,11 @@ class MainAgent:
         ):
             return AgentType.TRADE
 
-        # 2. 常见问答/知识型问法优先走 QA
         qa_keywords = [
-            # 中文
             "问答", "回答", "问题", "查询", "检索",
             "什么", "解释", "区别", "对比", "比较", "差异",
             "如何", "怎么", "为什么", "谁", "哪里", "哪些",
             "怎样", "是什么意思", "是什么", "如何理解",
-            # 英文
             "what", "explain", "difference", "differences", "compare",
             "how", "why", "who", "where", "which", "vs", "versus",
             "meaning of", "what is", "what are",
@@ -462,12 +459,14 @@ class MainAgent:
         if any(kw in text_lower for kw in qa_keywords):
             return AgentType.QA
 
-        # 3. 打招呼/闲聊等极短句走 CHAT，其余默认尝试 QA
-        chat_keywords = ["你好", "hello", "hi", "在吗", "谢谢", "再见", "help"]
-        if len(text_lower) <= 6 or any(kw in text_lower for kw in chat_keywords):
+        chat_keywords = [
+            "你好", "hello", "hi", "在吗", "谢谢", "再见", "help",
+            "帮我", "写", "总结", "生成", "翻译",
+        ]
+        if len(text_lower) <= 8 or any(kw in text_lower for kw in chat_keywords):
             return AgentType.CHAT
 
-        return AgentType.QA
+        return AgentType.CHAT
 
     async def _execute_tool(self, state: MainAgentState) -> MainAgentState:
         """通过 registry 执行当前 active_tool。"""
@@ -550,9 +549,13 @@ class MainAgent:
 
         try:
             registry = self._get_subagent_registry(user)
+            # 注入 session_id（若存在）
+            arguments = dict(active_subagent.get("arguments", {}))
+            if state.get("session_id"):
+                arguments["session_id"] = state["session_id"]
             result = await registry.execute(
                 active_subagent.get("name"),
-                active_subagent.get("arguments", {}),
+                arguments,
             )
             sr = state.get("subagent_results", [])
             sr.append(result)
@@ -668,21 +671,32 @@ class MainAgent:
         message: str,
         space_id: str,
         user_id: Optional[int] = None,
+        session_id: Optional[str] = None,
         context: Optional[Dict] = None,
         top_k: int = 5,
-        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        # 1. 若存在 session_id 且 memory_service 存在，召回历史上下文
+        conversation_history: List[Dict[str, str]] = []
+        if session_id and self._memory:
+            recalled = await self._memory.recall_chat_context(
+                session_id=session_id,
+                agent_type="main",
+                max_messages=20,
+            )
+            conversation_history = recalled
+
         initial_state: MainAgentState = {
             "user_request": message,
             "space_id": space_id,
             "user_id": user_id,
+            "session_id": session_id,
             "intent": None,
             "active_subagent": None,
             "subagent_result": None,
             "task_id": str(uuid.uuid4()),
             "task_status": TaskStatus.PENDING,
             "task_result": None,
-            "conversation_history": conversation_history or [],
+            "conversation_history": conversation_history,
             "context": context or {},
             "error": None,
             "retry_count": 0,
@@ -699,23 +713,25 @@ class MainAgent:
             "final_answer": None,
         }
 
-        # Detect intent for special paths
         yield {"type": "status", "data": "detecting_intent"}
         intent = self._simple_intent_detection(message)
         initial_state["intent"] = intent
         yield {"type": "intent", "data": intent.value}
         yield {"type": "agent_type", "data": intent.value}
 
-        # QA 保持特殊透传路径（流式）
         if intent == AgentType.QA:
             yield {"type": "status", "data": "running"}
+            has_error = False
             async for event in self._stream_qa_agent(initial_state, top_k):
+                if event.get("type") == "error":
+                    has_error = True
                 yield event
-            yield {"type": "status", "data": "completed"}
+            if not has_error:
+                yield {"type": "status", "data": "completed"}
             return
 
-        # Standard path: run LangGraph and stream progress
         yield {"type": "status", "data": "planning"}
+        has_error = False
         try:
             thread_id = initial_state.get("task_id", str(uuid.uuid4()))
             final_state = await self.graph.ainvoke(
@@ -726,7 +742,6 @@ class MainAgent:
             answer = task_result.get("answer", "")
 
             if answer:
-                # Stream answer as tokens for UI compatibility
                 chunk_size = 8
                 for i in range(0, len(answer), chunk_size):
                     yield {"type": "token", "data": answer[i : i + chunk_size]}
@@ -734,9 +749,11 @@ class MainAgent:
             yield {"type": "result", "data": task_result}
         except Exception as e:
             logger.exception(f"MainAgent graph execution failed: {e}")
+            has_error = True
             yield {"type": "error", "data": str(e)}
 
-        yield {"type": "status", "data": "completed"}
+        if not has_error:
+            yield {"type": "status", "data": "completed"}
 
     async def _stream_qa_agent(
         self,
@@ -764,6 +781,7 @@ class MainAgent:
 
         space_id = state.get("space_id", "")
         message = state.get("user_request", "")
+        session_id = state.get("session_id")
 
         try:
             async for event in qa_agent.stream(
@@ -772,6 +790,7 @@ class MainAgent:
                 user=user,
                 top_k=top_k,
                 conversation_history=state.get("conversation_history", []),
+                session_id=session_id,
             ):
                 if event["type"] == "token":
                     yield {"type": "token", "data": event["content"]}
@@ -800,9 +819,9 @@ class MainAgent:
         message: str,
         space_id: str,
         user_id: Optional[int] = None,
+        session_id: Optional[str] = None,
         context: Optional[Dict] = None,
         top_k: int = 5,
-        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         intent = None
         agent_type = None
@@ -811,7 +830,7 @@ class MainAgent:
         answer = None
 
         async for chunk in self.stream_chat(
-            message, space_id, user_id, context, top_k, conversation_history
+            message, space_id, user_id, session_id, context, top_k
         ):
             if chunk["type"] == "intent":
                 intent = chunk["data"]

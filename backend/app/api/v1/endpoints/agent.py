@@ -26,16 +26,21 @@ from app.services.base import get_llm_client
 from app.agents.core import MainAgent, AgentType
 from app.core.config import settings
 from app.db.models import AgentTasks, Spaces
+from app.services.memory import UnifiedMemoryService
 
 router = APIRouter()
 
 
-def create_main_agent(db: AsyncSession) -> MainAgent:
+def create_main_agent(
+    db: AsyncSession,
+    memory_service: Optional[UnifiedMemoryService] = None,
+) -> MainAgent:
     space_path = getattr(settings, "UPLOAD_DIR", "/tmp/uploads")
     return MainAgent(
         db=db,
         llm_client=get_llm_client(),
         space_path=space_path,
+        memory_service=memory_service,
     )
 
 
@@ -120,13 +125,29 @@ async def agent_chat(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    agent = create_main_agent(db)
     space_id_int = await resolve_space_id(db, req.space_id)
+
+    # 初始化 UnifiedMemoryService
+    memory = UnifiedMemoryService(
+        db=db,
+        user_id=current_user.id,
+        space_id=req.space_id,
+    )
+
+    # 处理 session_id
+    session_id = req.session_id
+    if not session_id:
+        session_id = await memory.create_session(user_id=current_user.id)
+
+    # 记录用户消息
+    await memory.remember_chat_turn(session_id, "user", req.message)
+
+    agent = create_main_agent(db, memory_service=memory)
 
     task = await _create_agent_task_record(
         db=db,
         agent_type="chat",
-        input_data={"message": req.message, "context": req.context},
+        input_data={"message": req.message, "context": req.context, "session_id": session_id},
         space_id=space_id_int,
         user_id=current_user.id,
     )
@@ -140,10 +161,18 @@ async def agent_chat(
             message=req.message,
             space_id=req.space_id,
             user_id=current_user.id,
+            session_id=session_id,
             context=req.context,
             top_k=req.top_k,
-            conversation_history=req.history or [],
         )
+
+        # 记录 assistant 回复
+        answer = result.get("answer") or ""
+        agent_type = result.get("agent_type", "unknown")
+        if answer:
+            await memory.remember_chat_turn(
+                session_id, "assistant", answer, agent_type=agent_type
+            )
 
         await _update_agent_task(
             db,
@@ -157,7 +186,8 @@ async def agent_chat(
         return AgentChatResponse(
             success=result.get("success", True),
             intent=result.get("intent"),
-            agent_type=result.get("agent_type", "unknown"),
+            agent_type=agent_type,
+            session_id=session_id,
             result=result.get("result", {}),
             answer=result.get("answer"),
             sources=result.get("sources"),
@@ -184,10 +214,25 @@ async def agent_chat_stream(
 
     space_id_int = await resolve_space_id(db, req.space_id)
 
+    # 初始化 UnifiedMemoryService
+    memory = UnifiedMemoryService(
+        db=db,
+        user_id=current_user.id,
+        space_id=req.space_id,
+    )
+
+    # 处理 session_id
+    session_id = req.session_id
+    if not session_id:
+        session_id = await memory.create_session(user_id=current_user.id)
+
+    # 记录用户消息
+    await memory.remember_chat_turn(session_id, "user", req.message)
+
     task = await _create_agent_task_record(
         db=db,
         agent_type="chat",
-        input_data={"message": req.message, "context": req.context},
+        input_data={"message": req.message, "context": req.context, "session_id": session_id},
         space_id=space_id_int,
         user_id=current_user.id,
     )
@@ -201,39 +246,74 @@ async def agent_chat_stream(
 
     task_public_id = task.public_id
     final_result = {}
+    stream_session_id = session_id
 
     async def event_stream():
         nonlocal final_result
+        has_error = False
 
         async with AsyncSessionLocal() as stream_db:
             try:
-                agent = create_main_agent(stream_db)
+                stream_memory = UnifiedMemoryService(
+                    db=stream_db,
+                    user_id=current_user.id,
+                    space_id=req.space_id,
+                    session_id=stream_session_id,
+                )
+                agent = create_main_agent(stream_db, memory_service=stream_memory)
 
                 async for chunk in agent.stream_chat(
                     message=req.message,
                     space_id=req.space_id,
                     user_id=current_user.id,
+                    session_id=stream_session_id,
                     context=req.context,
                     top_k=req.top_k,
-                    conversation_history=req.history or [],
                 ):
                     if chunk.get("type") == "intent" and "intent" not in final_result:
                         final_result["intent"] = chunk["data"]
                     if chunk.get("type") == "result":
                         final_result = chunk["data"]
+                        # 注入 session_id 到 result
+                        if isinstance(final_result, dict):
+                            final_result["session_id"] = stream_session_id
+                    if chunk.get("type") == "error":
+                        has_error = True
+                        final_result = {"error": chunk["data"]}
                     yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
                 yield "data: [DONE]\n\n"
 
-                async with AsyncSessionLocal() as final_db:
-                    await _update_agent_task(
-                        final_db,
-                        task_public_id,
-                        status="completed",
-                        output_data=final_result,
-                        subagent_result=final_result,
-                        finished_at=datetime.utcnow(),
+                # 记录 assistant 回复
+                answer = ""
+                agent_type = "unknown"
+                if isinstance(final_result, dict):
+                    answer = final_result.get("answer", "")
+                    agent_type = final_result.get("agent_type", "unknown")
+                if answer:
+                    await stream_memory.remember_chat_turn(
+                        stream_session_id, "assistant", answer, agent_type=agent_type
                     )
+
+                async with AsyncSessionLocal() as final_db:
+                    if not has_error:
+                        await _update_agent_task(
+                            final_db,
+                            task_public_id,
+                            status="completed",
+                            output_data=final_result,
+                            subagent_result=final_result,
+                            finished_at=datetime.utcnow(),
+                        )
+                    else:
+                        await _update_agent_task(
+                            final_db,
+                            task_public_id,
+                            status="failed",
+                            error=final_result.get("error", "Stream error"),
+                            output_data=final_result,
+                            finished_at=datetime.utcnow(),
+                        )
 
             except Exception as e:
                 error_result = {"error": str(e)}

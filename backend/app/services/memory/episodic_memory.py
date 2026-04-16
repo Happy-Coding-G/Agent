@@ -1,11 +1,12 @@
 """
-L2 中期记忆 (Episodic Memory) - PostgreSQL 实现
+L4 中期记忆 (Episodic Memory) - PostgreSQL 实现
 
 基于 PostgreSQL 的持久化对话历史存储，支持向量检索。
 适用于：
 - 跨会话的历史消息检索
 - 基于语义相似度的记忆召回
 - 对话摘要和长期存储
+- 统一事件流投影
 """
 
 from __future__ import annotations
@@ -32,13 +33,8 @@ class EpisodicMemory:
     - 会话管理（创建、更新、归档）
     - 消息存储（支持向量嵌入）
     - 语义检索（基于 pgvector）
+    - 统一事件流投影
     - 会话摘要生成
-
-    使用方式:
-        episodic = EpisodicMemory(db_session)
-        session = await episodic.create_session(user_id, title="帮助会话")
-        await episodic.add_message(session.session_id, "user", "你好")
-        similar = await episodic.search_similar("你好", user_id=user_id)
     """
 
     def __init__(self, db: AsyncSession):
@@ -50,17 +46,7 @@ class EpisodicMemory:
         title: Optional[str] = None,
         metadata: Optional[dict] = None,
     ) -> ConversationSessions:
-        """
-        创建新会话
-
-        Args:
-            user_id: 用户 ID
-            title: 会话标题
-            metadata: 可选元数据
-
-        Returns:
-            创建的会话对象
-        """
+        """创建新会话"""
         session_id = snowflake_id()
         session = ConversationSessions(
             id=session_id,
@@ -83,16 +69,7 @@ class EpisodicMemory:
         session_id: str,
         user_id: Optional[int] = None,
     ) -> Optional[ConversationSessions]:
-        """
-        获取会话信息
-
-        Args:
-            session_id: 会话 ID
-            user_id: 可选的用户 ID 过滤
-
-        Returns:
-            会话对象或 None
-        """
+        """获取会话信息"""
         query = select(ConversationSessions).where(
             ConversationSessions.session_id == session_id
         )
@@ -111,19 +88,7 @@ class EpisodicMemory:
         metadata: Optional[dict] = None,
         generate_embedding: bool = True,
     ) -> ConversationMessages:
-        """
-        添加消息到会话
-
-        Args:
-            session_id: 会话 ID
-            role: 角色 (user/assistant/system)
-            content: 消息内容
-            metadata: 可选元数据
-            generate_embedding: 是否生成向量嵌入
-
-        Returns:
-            创建的消息对象
-        """
+        """添加消息到会话"""
         message_id = snowflake_id()
         message = ConversationMessages(
             id=message_id,
@@ -134,7 +99,6 @@ class EpisodicMemory:
             metadata=metadata or {},
         )
 
-        # 生成向量嵌入
         if generate_embedding and content:
             try:
                 vector, model = await embed_query_with_fallback(content)
@@ -145,7 +109,6 @@ class EpisodicMemory:
 
         self.db.add(message)
 
-        # 更新会话消息计数
         session = await self.get_session(session_id)
         if session:
             session.message_count = (session.message_count or 0) + 1
@@ -157,6 +120,110 @@ class EpisodicMemory:
         logger.debug(f"Added message {message.message_id} to session {session_id}")
         return message
 
+    # ========================================================================
+    # 统一事件流投影
+    # ========================================================================
+
+    async def add_event(
+        self,
+        session_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        agent_type: str = "main",
+        generate_embedding: bool = False,
+    ) -> ConversationMessages:
+        """
+        添加事件到统一事件流
+
+        通过 ConversationMessages role="system" + metadata["event_type"] 区分事件类型。
+        支持的事件类型：
+        - chat_turn, tool_call, subagent_invoke
+        - trade_offer, trade_accept, trade_reject
+        - qa_citation, approval_required, risk_evaluated
+        """
+        content = payload.get("message") or payload.get("summary") or str(payload)
+        metadata = {
+            "event_type": event_type,
+            "agent_type": agent_type,
+            **payload,
+        }
+        return await self.add_message(
+            session_id=session_id,
+            role="system",
+            content=content,
+            metadata=metadata,
+            generate_embedding=generate_embedding,
+        )
+
+    async def get_events(
+        self,
+        session_id: str,
+        event_types: Optional[list[str]] = None,
+        agent_type: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """读取统一事件流投影"""
+        query = (
+            select(ConversationMessages)
+            .where(ConversationMessages.session_id == session_id)
+            .where(ConversationMessages.role == "system")
+            .order_by(ConversationMessages.created_at)
+            .limit(limit)
+        )
+
+        result = await self.db.execute(query)
+        messages = list(result.scalars().all())
+
+        events = []
+        for msg in messages:
+            evt_type = msg.metadata.get("event_type") if msg.metadata else None
+            if event_types and evt_type not in event_types:
+                continue
+            if agent_type and msg.metadata.get("agent_type") != agent_type:
+                continue
+            events.append({
+                "message_id": msg.message_id,
+                "session_id": msg.session_id,
+                "event_type": evt_type,
+                "agent_type": msg.metadata.get("agent_type") if msg.metadata else None,
+                "content": msg.content,
+                "metadata": msg.metadata,
+                "created_at": msg.created_at.isoformat() if msg.created_at else None,
+            })
+
+        return events
+
+    async def get_trajectory(
+        self,
+        session_id: str,
+        agent_type: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """
+        获取会话完整轨迹（所有消息 + 事件，按时间排序）
+        """
+        query = (
+            select(ConversationMessages)
+            .where(ConversationMessages.session_id == session_id)
+            .order_by(ConversationMessages.created_at)
+        )
+
+        result = await self.db.execute(query)
+        messages = list(result.scalars().all())
+
+        trajectory = []
+        for msg in messages:
+            if agent_type and msg.metadata and msg.metadata.get("agent_type") != agent_type:
+                continue
+            trajectory.append({
+                "message_id": msg.message_id,
+                "role": msg.role,
+                "content": msg.content,
+                "metadata": msg.metadata,
+                "created_at": msg.created_at.isoformat() if msg.created_at else None,
+            })
+
+        return trajectory
+
     async def get_messages(
         self,
         session_id: str,
@@ -164,18 +231,7 @@ class EpisodicMemory:
         offset: int = 0,
         include_embeddings: bool = False,
     ) -> list[ConversationMessages]:
-        """
-        获取会话的消息列表
-
-        Args:
-            session_id: 会话 ID
-            limit: 返回数量限制
-            offset: 分页偏移
-            include_embeddings: 是否包含向量数据
-
-        Returns:
-            消息对象列表
-        """
+        """获取会话的消息列表"""
         query = (
             select(ConversationMessages)
             .where(ConversationMessages.session_id == session_id)
@@ -187,7 +243,6 @@ class EpisodicMemory:
         result = await self.db.execute(query)
         messages = list(result.scalars().all())
 
-        # 默认不返回嵌入向量（节省内存）
         if not include_embeddings:
             for msg in messages:
                 msg.embedding = None
@@ -202,23 +257,9 @@ class EpisodicMemory:
         similarity_threshold: float = 0.7,
         session_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
-        """
-        基于语义相似度搜索历史消息
-
-        Args:
-            query: 查询文本
-            user_id: 可选的用户过滤
-            limit: 返回数量
-            similarity_threshold: 相似度阈值
-            session_id: 可选的会话过滤
-
-        Returns:
-            相似消息列表（包含相似度分数）
-        """
-        # 生成查询向量
+        """基于语义相似度搜索历史消息"""
         query_vector, _ = await embed_query_with_fallback(query)
 
-        # 构建基础查询
         base_query = select(
             ConversationMessages,
             (1 - ConversationMessages.embedding.cosine_distance(query_vector)).label("similarity"),
@@ -226,25 +267,21 @@ class EpisodicMemory:
             ConversationMessages.embedding.isnot(None)
         )
 
-        # 添加相似度过滤
         base_query = base_query.where(
             (1 - ConversationMessages.embedding.cosine_distance(query_vector)) >= similarity_threshold
         )
 
-        # 添加会话过滤
         if session_id:
             base_query = base_query.where(
                 ConversationMessages.session_id == session_id
             )
 
-        # 添加用户过滤（通过 session 关联）
         if user_id:
             base_query = base_query.join(
                 ConversationSessions,
                 ConversationMessages.session_id == ConversationSessions.session_id,
             ).where(ConversationSessions.user_id == user_id)
 
-        # 排序和限制
         base_query = base_query.order_by(desc("similarity")).limit(limit)
 
         result = await self.db.execute(base_query)
@@ -269,18 +306,7 @@ class EpisodicMemory:
         limit: int = 20,
         offset: int = 0,
     ) -> list[ConversationSessions]:
-        """
-        获取用户的会话列表
-
-        Args:
-            user_id: 用户 ID
-            status: 可选的状态过滤
-            limit: 返回数量
-            offset: 分页偏移
-
-        Returns:
-            会话列表
-        """
+        """获取用户的会话列表"""
         query = select(ConversationSessions).where(
             ConversationSessions.user_id == user_id
         )
@@ -298,13 +324,7 @@ class EpisodicMemory:
         session_id: str,
         summary: str,
     ) -> None:
-        """
-        更新会话摘要
-
-        Args:
-            session_id: 会话 ID
-            summary: 摘要内容
-        """
+        """更新会话摘要"""
         session = await self.get_session(session_id)
         if session:
             session.summary = summary
@@ -312,15 +332,7 @@ class EpisodicMemory:
             logger.debug(f"Updated summary for session {session_id}")
 
     async def archive_session(self, session_id: str) -> bool:
-        """
-        归档会话（标记为 inactive）
-
-        Args:
-            session_id: 会话 ID
-
-        Returns:
-            是否成功
-        """
+        """归档会话（标记为 inactive）"""
         session = await self.get_session(session_id)
         if session:
             session.status = "archived"
@@ -330,28 +342,17 @@ class EpisodicMemory:
         return False
 
     async def delete_session(self, session_id: str, user_id: Optional[int] = None) -> bool:
-        """
-        删除会话及其所有消息
-
-        Args:
-            session_id: 会话 ID
-            user_id: 可选的用户 ID 验证
-
-        Returns:
-            是否成功
-        """
+        """删除会话及其所有消息"""
         session = await self.get_session(session_id, user_id)
         if not session:
             return False
 
-        # 删除关联的消息
         await self.db.execute(
             ConversationMessages.__table__.delete().where(
                 ConversationMessages.session_id == session_id
             )
         )
 
-        # 删除会话
         await self.db.delete(session)
         await self.db.commit()
 
@@ -359,23 +360,13 @@ class EpisodicMemory:
         return True
 
     async def get_session_stats(self, user_id: int) -> dict[str, Any]:
-        """
-        获取用户会话统计
-
-        Args:
-            user_id: 用户 ID
-
-        Returns:
-            统计信息
-        """
-        # 总会话数
+        """获取用户会话统计"""
         session_count = await self.db.scalar(
             select(func.count(ConversationSessions.id)).where(
                 ConversationSessions.user_id == user_id
             )
         )
 
-        # 活跃会话数
         active_count = await self.db.scalar(
             select(func.count(ConversationSessions.id)).where(
                 and_(
@@ -385,7 +376,6 @@ class EpisodicMemory:
             )
         )
 
-        # 总消息数
         message_count = await self.db.scalar(
             select(func.count(ConversationMessages.id))
             .join(ConversationSessions)
@@ -403,19 +393,9 @@ class EpisodicMemory:
         days: int = 30,
         batch_size: int = 100,
     ) -> int:
-        """
-        清理过期的归档会话
-
-        Args:
-            days: 删除 N 天前的归档会话
-            batch_size: 每批处理数量
-
-        Returns:
-            删除的会话数
-        """
+        """清理过期的归档会话"""
         cutoff_date = datetime.utcnow() - timedelta(days=days)
 
-        # 查找需要删除的会话
         query = (
             select(ConversationSessions.session_id)
             .where(
@@ -433,14 +413,12 @@ class EpisodicMemory:
         if not session_ids:
             return 0
 
-        # 删除关联消息
         await self.db.execute(
             ConversationMessages.__table__.delete().where(
                 ConversationMessages.session_id.in_(session_ids)
             )
         )
 
-        # 删除会话
         await self.db.execute(
             ConversationSessions.__table__.delete().where(
                 ConversationSessions.session_id.in_(session_ids)
@@ -456,8 +434,6 @@ class EpisodicMemory:
 class EpisodicMemoryService:
     """
     中期记忆服务（用于依赖注入）
-
-    提供与 EpisodicMemory 相同的功能，但支持依赖注入模式。
     """
 
     def __init__(self, db: AsyncSession):
@@ -468,6 +444,15 @@ class EpisodicMemoryService:
 
     async def add_message(self, *args, **kwargs):
         return await self._memory.add_message(*args, **kwargs)
+
+    async def add_event(self, *args, **kwargs):
+        return await self._memory.add_event(*args, **kwargs)
+
+    async def get_events(self, *args, **kwargs):
+        return await self._memory.get_events(*args, **kwargs)
+
+    async def get_trajectory(self, *args, **kwargs):
+        return await self._memory.get_trajectory(*args, **kwargs)
 
     async def get_messages(self, *args, **kwargs):
         return await self._memory.get_messages(*args, **kwargs)

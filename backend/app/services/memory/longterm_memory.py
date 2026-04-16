@@ -1,5 +1,5 @@
 """
-L3 长期记忆 (Long-term Memory) - PostgreSQL + Neo4j 实现
+L5 长期记忆 (Long-term Memory) - PostgreSQL + Neo4j 实现
 
 存储用户的持久性偏好、习惯和知识：
 - 用户偏好（交互风格、主题偏好等）
@@ -33,12 +33,6 @@ class LongTermMemory:
     - 用户偏好（UserPreferences）
     - 长期记忆（UserMemories）
     - Agent 决策日志（AgentDecisionLogs）
-
-    使用方式:
-        ltm = LongTermMemory(db_session)
-        await ltm.set_preference(user_id, "chat_style", "concise", confidence=0.9)
-        style = await ltm.get_preference(user_id, "chat_style")
-        await ltm.add_memory(user_id, "用户喜欢Python编程", "fact", importance=8)
     """
 
     def __init__(self, db: AsyncSession):
@@ -55,21 +49,7 @@ class LongTermMemory:
         confidence: float = 0.5,
         source: str = "implicit",
     ) -> UserPreferences:
-        """
-        设置用户偏好
-
-        Args:
-            user_id: 用户 ID
-            key: 偏好键
-            value: 偏好值
-            pref_type: 偏好类型
-            confidence: 置信度 (0-1)
-            source: 来源 (explicit/implicit/learned)
-
-        Returns:
-            偏好记录
-        """
-        # 查找现有偏好
+        """设置用户偏好"""
         result = await self.db.execute(
             select(UserPreferences).where(
                 and_(
@@ -83,14 +63,12 @@ class LongTermMemory:
         value_str = json.dumps(value) if not isinstance(value, str) else value
 
         if existing:
-            # 更新现有偏好（加权平均置信度）
             existing.value = value_str
             existing.confidence = (existing.confidence + confidence) / 2
             existing.source = source
             existing.updated_at = datetime.utcnow()
             pref = existing
         else:
-            # 创建新偏好
             pref = UserPreferences(
                 id=snowflake_id(),
                 user_id=user_id,
@@ -114,17 +92,7 @@ class LongTermMemory:
         key: str,
         default: Any = None,
     ) -> Any:
-        """
-        获取用户偏好
-
-        Args:
-            user_id: 用户 ID
-            key: 偏好键
-            default: 默认值
-
-        Returns:
-            偏好值或默认值
-        """
+        """获取用户偏好"""
         result = await self.db.execute(
             select(UserPreferences).where(
                 and_(
@@ -149,17 +117,7 @@ class LongTermMemory:
         pref_type: str,
         min_confidence: float = 0.0,
     ) -> dict[str, Any]:
-        """
-        获取指定类型的所有偏好
-
-        Args:
-            user_id: 用户 ID
-            pref_type: 偏好类型
-            min_confidence: 最小置信度
-
-        Returns:
-            偏好字典
-        """
+        """获取指定类型的所有偏好"""
         result = await self.db.execute(
             select(UserPreferences).where(
                 and_(
@@ -180,16 +138,7 @@ class LongTermMemory:
         return prefs
 
     async def delete_preference(self, user_id: int, key: str) -> bool:
-        """
-        删除用户偏好
-
-        Args:
-            user_id: 用户 ID
-            key: 偏好键
-
-        Returns:
-            是否成功删除
-        """
+        """删除用户偏好"""
         result = await self.db.execute(
             select(UserPreferences).where(
                 and_(
@@ -219,22 +168,7 @@ class LongTermMemory:
         expires_at: Optional[datetime] = None,
         generate_embedding: bool = True,
     ) -> UserMemories:
-        """
-        添加长期记忆
-
-        Args:
-            user_id: 用户 ID
-            content: 记忆内容
-            memory_type: 记忆类型 (fact/preference/goal/event)
-            importance: 重要性 (1-10)
-            source: 来源
-            context: 上下文信息
-            expires_at: 过期时间
-            generate_embedding: 是否生成嵌入
-
-        Returns:
-            记忆记录
-        """
+        """添加长期记忆"""
         memory_id = f"mem_{snowflake_id()}"
 
         memory = UserMemories(
@@ -249,7 +183,6 @@ class LongTermMemory:
             expires_at=expires_at,
         )
 
-        # 生成向量嵌入
         if generate_embedding:
             try:
                 vector, model = await embed_query_with_fallback(content)
@@ -273,19 +206,7 @@ class LongTermMemory:
         limit: int = 100,
         include_expired: bool = False,
     ) -> list[UserMemories]:
-        """
-        获取用户的长期记忆
-
-        Args:
-            user_id: 用户 ID
-            memory_type: 可选的类型过滤
-            min_importance: 最小重要性
-            limit: 返回数量
-            include_expired: 是否包含过期记忆
-
-        Returns:
-            记忆列表
-        """
+        """获取用户的长期记忆"""
         query = select(UserMemories).where(
             and_(
                 UserMemories.user_id == user_id,
@@ -317,23 +238,9 @@ class LongTermMemory:
         limit: int = 10,
         similarity_threshold: float = 0.7,
     ) -> list[dict[str, Any]]:
-        """
-        基于语义相似度搜索记忆
-
-        Args:
-            user_id: 用户 ID
-            query: 查询文本
-            memory_type: 可选的类型过滤
-            limit: 返回数量
-            similarity_threshold: 相似度阈值
-
-        Returns:
-            相似记忆列表
-        """
-        # 生成查询向量
+        """基于语义相似度搜索记忆"""
         query_vector, _ = await embed_query_with_fallback(query)
 
-        # 构建查询
         base_query = select(
             UserMemories,
             (1 - UserMemories.embedding.cosine_distance(query_vector)).label("similarity"),
@@ -344,7 +251,6 @@ class LongTermMemory:
             )
         )
 
-        # 相似度过滤
         base_query = base_query.where(
             (1 - UserMemories.embedding.cosine_distance(query_vector)) >= similarity_threshold
         )
@@ -374,16 +280,7 @@ class LongTermMemory:
         memory_id: str,
         importance_delta: int,
     ) -> bool:
-        """
-        更新记忆重要性（用于强化/弱化记忆）
-
-        Args:
-            memory_id: 记忆 ID
-            importance_delta: 重要性变化值
-
-        Returns:
-            是否成功
-        """
+        """更新记忆重要性"""
         result = await self.db.execute(
             select(UserMemories).where(UserMemories.memory_id == memory_id)
         )
@@ -396,22 +293,13 @@ class LongTermMemory:
         return False
 
     async def delete_memory(self, memory_id: str, user_id: Optional[int] = None) -> bool:
-        """
-        删除记忆
-
-        Args:
-            memory_id: 记忆 ID
-            user_id: 可选的用户验证
-
-        Returns:
-            是否成功
-        """
-        query = select(UserMemories).where(UserMemories.memory_id == memory_id)
+        """删除记忆"""
+        q = select(UserMemories).where(UserMemories.memory_id == memory_id)
 
         if user_id:
-            query = query.where(UserMemories.user_id == user_id)
+            q = q.where(UserMemories.user_id == user_id)
 
-        result = await self.db.execute(query)
+        result = await self.db.execute(q)
         memory = result.scalar_one_or_none()
 
         if memory:
@@ -419,6 +307,82 @@ class LongTermMemory:
             await self.db.commit()
             return True
         return False
+
+    # ==================== 语义提取增强 ====================
+
+    async def extract_and_store_facts(
+        self,
+        user_id: int,
+        session_summary: str,
+    ) -> list[dict[str, Any]]:
+        """
+        从会话摘要中提取稳定事实并写入 UserMemories
+
+        TODO: 接入 LLM 进行结构化事实提取
+        """
+        facts = []
+        # 简单的启发式提取作为 fallback
+        indicators = [
+            ("喜欢", "preference", 7),
+            ("偏好", "preference", 7),
+            ("需要", "goal", 6),
+            ("目标", "goal", 6),
+            ("关注", "interest", 6),
+            ("讨厌", "preference", 7),
+        ]
+
+        for keyword, mtype, importance in indicators:
+            if keyword in session_summary:
+                # 提取 keyword 所在的简单句子片段
+                idx = session_summary.find(keyword)
+                start = max(0, idx - 20)
+                end = min(len(session_summary), idx + 40)
+                snippet = session_summary[start:end].strip(" ，。！？")
+                if snippet:
+                    memory = await self.add_memory(
+                        user_id=user_id,
+                        content=snippet,
+                        memory_type=mtype,
+                        importance=importance,
+                        source="session_summary_extraction",
+                    )
+                    facts.append({
+                        "memory_id": memory.memory_id,
+                        "type": mtype,
+                        "content": memory.content,
+                    })
+
+        return facts
+
+    async def get_user_profile(self, user_id: int) -> dict[str, Any]:
+        """
+        聚合用户画像：UserPreferences + UserMemories
+        """
+        preferences = await self.get_preferences_by_type(
+            user_id=user_id,
+            pref_type="chat",
+            min_confidence=0.5,
+        )
+        memories = await self.get_memories(
+            user_id=user_id,
+            min_importance=5,
+            limit=20,
+        )
+
+        return {
+            "user_id": user_id,
+            "preferences": preferences,
+            "memories": [
+                {
+                    "memory_id": m.memory_id,
+                    "content": m.content,
+                    "memory_type": m.memory_type,
+                    "importance": m.importance,
+                    "created_at": m.created_at.isoformat() if m.created_at else None,
+                }
+                for m in memories
+            ],
+        }
 
     # ==================== Agent 决策日志 ====================
 
@@ -431,20 +395,7 @@ class LongTermMemory:
         reasoning: Optional[str] = None,
         outcome: Optional[str] = None,
     ) -> AgentDecisionLogs:
-        """
-        记录 Agent 决策
-
-        Args:
-            task_id: 任务 ID
-            agent_type: Agent 类型
-            decision: 决策内容
-            context: 决策上下文
-            reasoning: 推理过程
-            outcome: 决策结果
-
-        Returns:
-            决策日志记录
-        """
+        """记录 Agent 决策"""
         log = AgentDecisionLogs(
             id=snowflake_id(),
             log_id=f"log_{snowflake_id()}",
@@ -469,17 +420,7 @@ class LongTermMemory:
         task_id: Optional[str] = None,
         limit: int = 100,
     ) -> list[AgentDecisionLogs]:
-        """
-        获取决策历史
-
-        Args:
-            agent_type: 可选的 Agent 类型过滤
-            task_id: 可选的任务 ID 过滤
-            limit: 返回数量
-
-        Returns:
-            决策日志列表
-        """
+        """获取决策历史"""
         query = select(AgentDecisionLogs)
 
         if agent_type:
@@ -496,18 +437,9 @@ class LongTermMemory:
     # ==================== 记忆维护 ====================
 
     async def consolidate_memories(self, user_id: int) -> dict[str, int]:
-        """
-        整合记忆（合并相似记忆，清理过期内容）
-
-        Args:
-            user_id: 用户 ID
-
-        Returns:
-            整合统计
-        """
+        """整合记忆"""
         stats = {"merged": 0, "deleted": 0, "updated": 0}
 
-        # 清理过期记忆
         expired = await self.db.execute(
             select(UserMemories).where(
                 and_(
@@ -527,21 +459,11 @@ class LongTermMemory:
         return stats
 
     async def get_memory_summary(self, user_id: int) -> dict[str, Any]:
-        """
-        获取记忆摘要
-
-        Args:
-            user_id: 用户 ID
-
-        Returns:
-            记忆统计信息
-        """
-        # 总记忆数
+        """获取记忆摘要"""
         total_memories = await self.db.scalar(
             select(func.count(UserMemories.id)).where(UserMemories.user_id == user_id)
         )
 
-        # 按类型统计
         type_counts = await self.db.execute(
             select(
                 UserMemories.memory_type,
@@ -551,7 +473,6 @@ class LongTermMemory:
             .group_by(UserMemories.memory_type)
         )
 
-        # 平均重要性
         avg_importance = await self.db.scalar(
             select(func.avg(UserMemories.importance)).where(
                 UserMemories.user_id == user_id

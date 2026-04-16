@@ -1,5 +1,5 @@
 """
-L1 短期记忆 (Session Memory) - Redis 实现
+L3 会话工作记忆 (Session Memory) - Redis 实现
 
 基于 Redis 的短期对话缓存，用于存储活跃的会话上下文。
 适用于快速访问最近对话历史，自动过期机制防止内存膨胀。
@@ -32,7 +32,7 @@ class SessionMemory:
     - 工作记忆提取
 
     使用方式:
-        session_memory = SessionMemory()
+        session_memory = SessionMemory(user_id=1, space_id="space_xxx")
         await session_memory.add_message(session_id, role, content)
         recent_messages = await session_memory.get_recent_messages(session_id, limit=10)
     """
@@ -40,10 +40,16 @@ class SessionMemory:
     def __init__(
         self,
         redis_client: Optional[redis.Redis] = None,
+        user_id: Optional[int] = None,
+        space_id: Optional[str] = None,
+        agent_type: str = "main",
         max_messages: int = 20,
         ttl_seconds: int = 3600,
     ):
         self._redis = redis_client
+        self.user_id = user_id
+        self.space_id = space_id
+        self.agent_type = agent_type
         self.max_messages = max_messages
         self.ttl_seconds = ttl_seconds
         self._initialized = False
@@ -79,14 +85,29 @@ class SessionMemory:
 
     def _make_session_key(self, session_id: str) -> str:
         """生成会话 Redis 键"""
-        return f"session:{session_id}:messages"
+        return f"agent:{self.user_id}:{self.space_id}:{session_id}:{self.agent_type}:messages"
 
     def _make_state_key(self, session_id: str) -> str:
         """生成会话状态 Redis 键"""
-        return f"session:{session_id}:state"
+        return f"agent:{self.user_id}:{self.space_id}:{session_id}:{self.agent_type}:state"
 
     def _make_working_memory_key(self, session_id: str) -> str:
         """生成工作记忆 Redis 键"""
+        return f"agent:{self.user_id}:{self.space_id}:{session_id}:{self.agent_type}:working_memory"
+
+    # --------------------------------------------------------------------------
+    # 旧键兼容方法（过渡使用）
+    # --------------------------------------------------------------------------
+    def _make_legacy_session_key(self, session_id: str) -> str:
+        """[DEPRECATED] 旧版会话 Redis 键"""
+        return f"session:{session_id}:messages"
+
+    def _make_legacy_state_key(self, session_id: str) -> str:
+        """[DEPRECATED] 旧版会话状态 Redis 键"""
+        return f"session:{session_id}:state"
+
+    def _make_legacy_working_memory_key(self, session_id: str) -> str:
+        """[DEPRECATED] 旧版工作记忆 Redis 键"""
         return f"session:{session_id}:working_memory"
 
     async def add_message(
@@ -98,15 +119,6 @@ class SessionMemory:
     ) -> dict[str, Any]:
         """
         添加消息到短期记忆
-
-        Args:
-            session_id: 会话 ID
-            role: 角色 (user/assistant/system)
-            content: 消息内容
-            metadata: 可选的元数据
-
-        Returns:
-            存储的消息记录
         """
         redis_client = await self._get_redis()
         key = self._make_session_key(session_id)
@@ -118,7 +130,6 @@ class SessionMemory:
             "metadata": metadata or {},
         }
 
-        # 使用 Redis List，保留最近消息
         await redis_client.lpush(key, json.dumps(message, ensure_ascii=False))
         await redis_client.ltrim(key, 0, self.max_messages - 1)
         await redis_client.expire(key, self.ttl_seconds)
@@ -133,21 +144,13 @@ class SessionMemory:
     ) -> list[dict[str, Any]]:
         """
         获取最近的消息历史
-
-        Args:
-            session_id: 会话 ID
-            limit: 返回消息数量 (从最新开始)
-
-        Returns:
-            消息列表 (时间顺序)
         """
         redis_client = await self._get_redis()
         key = self._make_session_key(session_id)
 
-        # 获取最近的 N 条消息，反转使其按时间顺序
         raw_messages = await redis_client.lrange(key, 0, limit - 1)
         messages = [json.loads(msg) for msg in raw_messages]
-        messages.reverse()  # 按时间顺序排列
+        messages.reverse()
 
         return messages
 
@@ -158,19 +161,11 @@ class SessionMemory:
     ) -> dict[str, Any]:
         """
         获取完整的会话上下文（用于 LLM 调用）
-
-        Args:
-            session_id: 会话 ID
-            max_tokens: 最大 token 数限制
-
-        Returns:
-            包含 messages 和 metadata 的上下文
         """
         messages = await self.get_recent_messages(session_id, limit=self.max_messages)
 
-        # 简单的 token 估算 (实际项目中可使用 tiktoken)
         total_chars = sum(len(m["content"]) for m in messages)
-        estimated_tokens = total_chars // 2  # 粗略估算
+        estimated_tokens = total_chars // 2
 
         context = {
             "session_id": session_id,
@@ -187,13 +182,7 @@ class SessionMemory:
         session_id: str,
         state: dict[str, Any],
     ) -> None:
-        """
-        设置会话状态
-
-        Args:
-            session_id: 会话 ID
-            state: 状态字典
-        """
+        """设置会话状态"""
         redis_client = await self._get_redis()
         key = self._make_state_key(session_id)
 
@@ -207,15 +196,7 @@ class SessionMemory:
         self,
         session_id: str,
     ) -> Optional[dict[str, Any]]:
-        """
-        获取会话状态
-
-        Args:
-            session_id: 会话 ID
-
-        Returns:
-            状态字典或 None
-        """
+        """获取会话状态"""
         redis_client = await self._get_redis()
         key = self._make_state_key(session_id)
 
@@ -252,7 +233,6 @@ class SessionMemory:
             "updated_at": datetime.utcnow().isoformat(),
         }
 
-        # 使用 HSET 原子更新单个字段
         await redis_client.hset(wm_key, key, pickle.dumps(entry))
         await redis_client.expire(wm_key, ttl or self.ttl_seconds)
 
@@ -284,12 +264,7 @@ class SessionMemory:
             return result
 
     async def clear_session(self, session_id: str) -> None:
-        """
-        清除会话的所有短期记忆
-
-        Args:
-            session_id: 会话 ID
-        """
+        """清除会话的所有短期记忆"""
         redis_client = await self._get_redis()
 
         keys = [
@@ -301,39 +276,27 @@ class SessionMemory:
         await redis_client.delete(*keys)
         logger.info(f"Cleared session memory for {session_id}")
 
-    async def get_active_sessions(self, pattern: str = "session:*:messages") -> list[str]:
+    async def get_active_sessions(
+        self,
+        pattern: Optional[str] = None,
+    ) -> list[str]:
         """
         获取活跃的会话列表
-
-        Args:
-            pattern: Redis key 匹配模式
-
-        Returns:
-            会话 ID 列表
         """
         redis_client = await self._get_redis()
+        pattern = pattern or f"agent:{self.user_id}:{self.space_id}:*:{self.agent_type}:messages"
         keys = await redis_client.keys(pattern)
 
-        # 从 key 中提取 session_id
         session_ids = []
         for key in keys:
             parts = key.split(":")
-            if len(parts) >= 2:
-                session_ids.append(parts[1])
+            if len(parts) >= 4:
+                session_ids.append(parts[3])
 
         return list(set(session_ids))
 
     async def extend_ttl(self, session_id: str, additional_seconds: int) -> bool:
-        """
-        延长会话过期时间
-
-        Args:
-            session_id: 会话 ID
-            additional_seconds: 增加的秒数
-
-        Returns:
-            是否成功
-        """
+        """延长会话过期时间"""
         redis_client = await self._get_redis()
 
         keys = [
@@ -353,14 +316,83 @@ class SessionMemory:
 
         return success
 
+    # --------------------------------------------------------------------------
+    # 兼容旧 API 的方法（@deprecated）
+    # --------------------------------------------------------------------------
+    async def add_message_legacy(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        metadata: Optional[dict] = None,
+    ) -> dict[str, Any]:
+        """[DEPRECATED] 使用旧键格式添加消息"""
+        redis_client = await self._get_redis()
+        key = self._make_legacy_session_key(session_id)
+        message = {
+            "role": role,
+            "content": content,
+            "timestamp": datetime.utcnow().isoformat(),
+            "metadata": metadata or {},
+        }
+        await redis_client.lpush(key, json.dumps(message, ensure_ascii=False))
+        await redis_client.ltrim(key, 0, self.max_messages - 1)
+        await redis_client.expire(key, self.ttl_seconds)
+        return message
+
+    async def get_recent_messages_legacy(
+        self,
+        session_id: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """[DEPRECATED] 使用旧键格式获取最近消息"""
+        redis_client = await self._get_redis()
+        key = self._make_legacy_session_key(session_id)
+        raw_messages = await redis_client.lrange(key, 0, limit - 1)
+        messages = [json.loads(msg) for msg in raw_messages]
+        messages.reverse()
+        return messages
+
+    async def clear_session_legacy(self, session_id: str) -> None:
+        """[DEPRECATED] 使用旧键格式清除会话"""
+        redis_client = await self._get_redis()
+        keys = [
+            self._make_legacy_session_key(session_id),
+            self._make_legacy_state_key(session_id),
+            self._make_legacy_working_memory_key(session_id),
+        ]
+        await redis_client.delete(*keys)
+
+    async def get_active_sessions_legacy(
+        self,
+        pattern: str = "session:*:messages",
+    ) -> list[str]:
+        """[DEPRECATED] 使用旧键模式获取活跃会话"""
+        redis_client = await self._get_redis()
+        keys = await redis_client.keys(pattern)
+        session_ids = []
+        for key in keys:
+            parts = key.split(":")
+            if len(parts) >= 2:
+                session_ids.append(parts[1])
+        return list(set(session_ids))
+
 
 # 全局短期记忆实例
 _session_memory: Optional[SessionMemory] = None
 
 
-def get_session_memory() -> SessionMemory:
+def get_session_memory(
+    user_id: Optional[int] = None,
+    space_id: Optional[str] = None,
+    agent_type: str = "main",
+) -> SessionMemory:
     """获取全局 SessionMemory 实例"""
     global _session_memory
     if _session_memory is None:
-        _session_memory = SessionMemory()
+        _session_memory = SessionMemory(
+            user_id=user_id,
+            space_id=space_id,
+            agent_type=agent_type,
+        )
     return _session_memory

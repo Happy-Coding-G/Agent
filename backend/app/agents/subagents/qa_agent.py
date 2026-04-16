@@ -150,12 +150,8 @@ class QAAgent(SpaceAwareService):
         )
         builder.add_node("format_sources", RunnableLambda(self._format_sources_node))
 
-        builder.add_conditional_edges(
-            "classify_query",
-            lambda state: ["vector_search", "graph_search"],
-            None,
-        )
-        builder.add_edge("vector_search", "hybrid_merge")
+        builder.add_edge("classify_query", "vector_search")
+        builder.add_edge("vector_search", "graph_search")
         builder.add_edge("graph_search", "hybrid_merge")
         builder.add_edge("hybrid_merge", "rerank_hybrid")
         builder.add_conditional_edges(
@@ -191,6 +187,7 @@ class QAAgent(SpaceAwareService):
         top_k: int = 5,
         context_items: Optional[List[Dict[str, Any]]] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Run QA in non-streaming mode.
@@ -259,6 +256,7 @@ class QAAgent(SpaceAwareService):
         user: Users,
         top_k: int = 5,
         conversation_history: Optional[List[Dict[str, str]]] = None,
+        session_id: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Run QA in true streaming mode.
@@ -308,20 +306,20 @@ class QAAgent(SpaceAwareService):
                 state = await self._format_sources_node(state)
                 yield {"type": "sources", "content": state.get("sources", [])}
                 yield {"type": "token", "content": answer}
-                yield {
-                    "type": "result",
-                    "content": {
-                        "success": True,
-                        "agent_type": "qa",
-                        "answer": answer,
-                        "sources": state.get("sources", []),
-                        "retrieval_debug": {
-                            "vector_count": len(state.get("vector_results", [])),
-                            "graph_count": len(state.get("graph_results", [])),
-                            "hybrid_count": len(state.get("hybrid_results", [])),
-                        },
+                result_content = {
+                    "success": True,
+                    "agent_type": "qa",
+                    "answer": answer,
+                    "sources": state.get("sources", []),
+                    "retrieval_debug": {
+                        "vector_count": len(state.get("vector_results", [])),
+                        "graph_count": len(state.get("graph_results", [])),
+                        "hybrid_count": len(state.get("hybrid_results", [])),
                     },
                 }
+                yield {"type": "result", "content": result_content}
+                if session_id:
+                    await self._persist_qa_memory(session_id, query, result_content, user, state.get("hybrid_results", []))
                 return
 
             # 3. 格式化来源并输出
@@ -346,20 +344,20 @@ class QAAgent(SpaceAwareService):
             answer = "".join(answer_parts)
             state["answer"] = answer
 
-            yield {
-                "type": "result",
-                "content": {
-                    "success": True,
-                    "agent_type": "qa",
-                    "answer": answer,
-                    "sources": state.get("sources", []),
-                    "retrieval_debug": {
-                        "vector_count": len(state.get("vector_results", [])),
-                        "graph_count": len(state.get("graph_results", [])),
-                        "hybrid_count": len(state.get("hybrid_results", [])),
-                    },
+            result_content = {
+                "success": True,
+                "agent_type": "qa",
+                "answer": answer,
+                "sources": state.get("sources", []),
+                "retrieval_debug": {
+                    "vector_count": len(state.get("vector_results", [])),
+                    "graph_count": len(state.get("graph_results", [])),
+                    "hybrid_count": len(state.get("hybrid_results", [])),
                 },
             }
+            yield {"type": "result", "content": result_content}
+            if session_id:
+                await self._persist_qa_memory(session_id, query, result_content, user, state.get("hybrid_results", []))
 
         except ServiceError as e:
             yield {"type": "error", "content": str(e.detail)}
@@ -1260,3 +1258,67 @@ class QAAgent(SpaceAwareService):
                 "content": chunk.content,
             }
         return hydrated
+
+    async def _persist_qa_memory(
+        self,
+        session_id: str,
+        query: str,
+        result_content: Dict[str, Any],
+        user: Users,
+        hybrid_results: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        """将 QA 结果持久化到 L3 Redis 和 L4 PostgreSQL"""
+        try:
+            from app.services.memory import UnifiedMemoryService
+
+            memory = UnifiedMemoryService(
+                db=self.db,
+                user_id=user.id,
+                agent_type="qa",
+            )
+
+            # L3: 写入检索上下文摘要
+            context_summary = {
+                "query": query,
+                "top_sources": [
+                    {
+                        "doc_id": item.get("doc_id"),
+                        "doc_title": item.get("doc_title"),
+                        "score": item.get("score"),
+                    }
+                    for item in (hybrid_results or [])[:3]
+                ],
+            }
+            await memory.set_working_memory(
+                key="qa:context",
+                value=context_summary,
+                session_id=session_id,
+                agent_type="qa",
+            )
+
+            # L4: 写入 assistant 回答 + sources/citations
+            await memory.remember_chat_turn(
+                session_id=session_id,
+                role="assistant",
+                content=result_content.get("answer", ""),
+                agent_type="qa",
+                metadata={
+                    "sources": result_content.get("sources", []),
+                    "citations": result_content.get("sources", []),
+                    "retrieval_debug": result_content.get("retrieval_debug", {}),
+                },
+            )
+
+            # L4: 记录 QA 事件
+            await memory.log_event(
+                event_type="qa_citation",
+                payload={
+                    "query": query,
+                    "answer_summary": result_content.get("answer", "")[:200],
+                    "source_count": len(result_content.get("sources", [])),
+                },
+                session_id=session_id,
+                agent_type="qa",
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to persist QA memory: {exc}")

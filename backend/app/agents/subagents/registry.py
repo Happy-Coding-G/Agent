@@ -69,6 +69,10 @@ class SubAgentRegistry:
     async def execute(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         enriched = dict(arguments)
 
+        # 注入外层 session_id（若存在）
+        if "session_id" in arguments:
+            enriched["session_id"] = arguments["session_id"]
+
         if name == "qa_research":
             if "user" not in enriched:
                 enriched["user"] = self.user

@@ -72,6 +72,8 @@ export default function ChatTab({ tab }: { tab: Tab }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const storageKey = `chat-history-${tab.id}`;
+  const sessionStorageKey = `chat-session-${tab.id}`;
+
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     try {
       const raw = localStorage.getItem(storageKey);
@@ -84,6 +86,15 @@ export default function ChatTab({ tab }: { tab: Tab }) {
       },
     ];
   });
+
+  const [sessionId, setSessionId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(sessionStorageKey);
+    } catch {
+      return null;
+    }
+  });
+
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [panelMode, setPanelMode] = useState<"chat" | "graph">("chat");
@@ -96,12 +107,33 @@ export default function ChatTab({ tab }: { tab: Tab }) {
   }, [messages, storageKey]);
 
   useEffect(() => {
+    try {
+      if (sessionId) {
+        localStorage.setItem(sessionStorageKey, sessionId);
+      } else {
+        localStorage.removeItem(sessionStorageKey);
+      }
+    } catch {}
+  }, [sessionId, sessionStorageKey]);
+
+  useEffect(() => {
     if (!scrollRef.current) return;
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages, activeStatus]);
 
   const appendStatus = (status: string) => {
     setActiveStatus(statusLabel(status));
+  };
+
+  const handleNewSession = () => {
+    setSessionId(null);
+    setMessages([
+      {
+        role: "assistant",
+        content: "你好，我是 Agent 数据空间助手。你可以通过聊天管理文件、文档、知识图谱、资产和交易。",
+      },
+    ]);
+    log("[Chat] 新建会话");
   };
 
   const handleSend = async (textOverride?: string) => {
@@ -121,16 +153,7 @@ export default function ChatTab({ tab }: { tab: Tab }) {
     let assistantContent = "";
     let toolResults: ToolResult[] = [];
     let sources: SourceItem[] = [];
-
-    // 构造最近 3 轮对话历史（user + assistant）
-    const history = messages
-      .filter((m) => m.role === "user" || m.role === "assistant")
-      .slice(-6)
-      .map((m) => ({
-        query: m.role === "user" ? m.content : "",
-        answer: m.role === "assistant" ? m.content : "",
-      }))
-      .filter((m) => m.query || m.answer);
+    let returnedSessionId: string | null = sessionId;
 
     try {
       await agentChatStream(query, space.public_id, (event) => {
@@ -161,6 +184,9 @@ export default function ChatTab({ tab }: { tab: Tab }) {
           if (data && Array.isArray(data.sources)) {
             sources = data.sources as SourceItem[];
           }
+          if (data && typeof data.session_id === "string") {
+            returnedSessionId = data.session_id;
+          }
           setMessages((prev) => {
             const last = prev[prev.length - 1];
             if (last?.role === "assistant") {
@@ -173,7 +199,11 @@ export default function ChatTab({ tab }: { tab: Tab }) {
           log(`[Chat] error: ${err}`);
           setMessages((prev) => [...prev, { role: "status", content: `错误: ${err}` }]);
         }
-      }, history);
+      }, sessionId ?? undefined);
+
+      if (returnedSessionId && returnedSessionId !== sessionId) {
+        setSessionId(returnedSessionId);
+      }
     } catch (e: any) {
       log(`[Chat] request failed: ${e?.message ?? String(e)}`);
       setMessages((prev) => [...prev, { role: "status", content: `请求失败: ${e?.message ?? "network error"}` }]);
@@ -265,8 +295,18 @@ export default function ChatTab({ tab }: { tab: Tab }) {
             Graph
           </button>
         </div>
-        <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-          {panelMode === "chat" ? "Agent-First Chat" : "Graph mode"}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button
+            className="btn btn-ghost"
+            onClick={handleNewSession}
+            disabled={streaming}
+            style={{ fontSize: 12 }}
+          >
+            新建会话
+          </button>
+          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+            {panelMode === "chat" ? "Agent-First Chat" : "Graph mode"}
+          </div>
         </div>
       </div>
 
