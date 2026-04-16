@@ -383,6 +383,171 @@ class TradeService:
             await self._db.rollback()
             raise ServiceError(500, f"Purchase failed: {str(e)}")
 
+    async def purchase_negotiated(
+        self, listing_id: str, buyer: Users, agreed_price_credits: float
+    ) -> Dict[str, Any]:
+        """
+        协商成交后的购买结算。
+
+        复制 purchase() 的完整 ACID 事务体，但将成交价替换为传入的 agreed_price_credits。
+        """
+        # Check if already purchased
+        existing_holding = await self._repo.get_holding_by_listing(buyer.id, listing_id)
+        if existing_holding:
+            order = await self._repo.get_order_by_public_id(existing_holding.order_id)
+            return {
+                "status": "already_purchased",
+                "order": self._format_order_response(order),
+                "holding": self._format_holding_response(existing_holding),
+            }
+
+        listing = await self._repo.get_listing_by_public_id(listing_id, lock=True)
+        if not listing:
+            raise ServiceError(404, "Listing not found")
+
+        if listing.status != "active":
+            raise ServiceError(400, f"Listing is not active (status: {listing.status})")
+
+        if listing.seller_user_id == buyer.id:
+            raise ServiceError(400, "Cannot purchase your own listing")
+
+        buyer_wallet = await self._repo.get_wallet(buyer.id, lock=True)
+        if not buyer_wallet:
+            raise ServiceError(404, "Buyer wallet not found")
+
+        seller_wallet = await self._repo.get_wallet(listing.seller_user_id, lock=True)
+        if not seller_wallet:
+            raise ServiceError(404, "Seller wallet not found")
+
+        agreed_price_cents = int(agreed_price_credits * 100)
+        if cents_to_credits(buyer_wallet.liquid_credits) < agreed_price_credits:
+            raise ServiceError(
+                400,
+                f"Insufficient balance. Available: {cents_to_credits(buyer_wallet.liquid_credits):.2f}, "
+                f"Required: {cents_to_credits(agreed_price_cents):.2f}"
+            )
+
+        platform_fee_rate = Decimal("0.05")
+        platform_fee_cents = int(Decimal(agreed_price_cents) * platform_fee_rate)
+        seller_income_cents = agreed_price_cents - platform_fee_cents
+
+        try:
+            await self._repo.debit_wallet(
+                user_id=buyer.id,
+                amount_credits=cents_to_credits(agreed_price_cents),
+                tx_type="purchase",
+                metadata={
+                    "listing_id": listing_id,
+                    "seller_id": listing.seller_user_id,
+                    "negotiated": True,
+                },
+            )
+
+            await self._repo.credit_wallet(
+                user_id=listing.seller_user_id,
+                amount_credits=cents_to_credits(seller_income_cents),
+                tx_type="sale_income",
+                metadata={
+                    "listing_id": listing_id,
+                    "buyer_id": buyer.id,
+                    "platform_fee": cents_to_credits(platform_fee_cents),
+                    "negotiated": True,
+                },
+            )
+
+            seller_wallet.cumulative_sales_earnings += seller_income_cents
+
+            import json
+            delivery_payload = json.loads(
+                listing.delivery_payload_encrypted.decode('utf-8')
+                if listing.delivery_payload_encrypted
+                else '{}'
+            )
+
+            order = await self._repo.create_order(
+                listing=listing,
+                buyer_user_id=buyer.id,
+                delivery_payload=delivery_payload,
+                override_price_cents=agreed_price_cents,
+            )
+
+            await self._repo.update_listing_stats(
+                listing_id=listing_id,
+                increment_purchases=True,
+                revenue_cents=seller_income_cents,
+            )
+
+            holding = await self._repo.create_holding(
+                user_id=buyer.id,
+                order_id=order.public_id,
+                listing_id=listing_id,
+                asset_title=listing.title,
+                seller_alias=listing.seller_alias,
+            )
+
+            rights_template = listing.rights_template or {}
+            from app.db.models import ComputationMethod
+            rights_tx = await self._repo.create_rights_transaction(
+                data_asset_id=listing.asset_id or "",
+                owner_id=listing.seller_user_id,
+                buyer_id=buyer.id,
+                listing_id=listing_id,
+                order_id=order.public_id,
+                rights_types=rights_template.get("rights_types", ["view", "download"]),
+                usage_scope=rights_template.get("usage_scope", {"purpose": "personal_research"}),
+                restrictions=rights_template.get("restrictions", []),
+                agreed_price=cents_to_credits(agreed_price_cents),
+                computation_method=ComputationMethod(
+                    rights_template.get("computation_method", "raw_data")
+                ),
+                anonymization_level=rights_template.get("anonymization_level", 1),
+                validity_days=rights_template.get("validity_period_days", 365),
+            )
+
+            lineage_service = LineageService(self._db)
+            await lineage_service.record_lineage(
+                entity_type=DataLineageType.ASSET,
+                entity_id=listing.asset_id or "",
+                event_type=LineageEventType.TRANSFORMED,
+                source_entity_type=DataLineageType.ASSET,
+                source_entity_id=listing.asset_id or "",
+                user_id=buyer.id,
+                space_id=listing.space_public_id or "",
+                metadata={
+                    "rights_transaction_id": rights_tx.transaction_id,
+                    "order_id": order.public_id,
+                    "rights_types": rights_template.get("rights_types", []),
+                    "event": "negotiated_purchase_rights_assigned",
+                },
+                transformation_logic="Data rights assigned upon negotiated purchase",
+            )
+
+            await self._db.commit()
+
+            return {
+                "status": "completed",
+                "order": self._format_order_response(order),
+                "holding": self._format_holding_response(holding),
+            }
+
+        except IntegrityError as e:
+            await self._db.rollback()
+            error_str = str(e).lower()
+            if "uk_holdings_user_listing" in error_str or "unique" in error_str:
+                existing = await self._repo.get_holding_by_listing(buyer.id, listing_id)
+                if existing:
+                    order = await self._repo.get_order_by_public_id(existing.order_id)
+                    return {
+                        "status": "already_purchased",
+                        "order": self._format_order_response(order),
+                        "holding": self._format_holding_response(existing),
+                    }
+            raise ServiceError(500, f"Purchase failed: {str(e)}")
+
+        except Exception as e:
+            await self._db.rollback()
+            raise ServiceError(500, f"Purchase failed: {str(e)}")
+
     # ==========================================================================
     # Yield Workflow - Idempotent with Last-Run Tracking
     # ==========================================================================

@@ -420,6 +420,7 @@ class TradeRepository:
         listing: TradeListings,
         buyer_user_id: int,
         delivery_payload: dict,
+        override_price_cents: Optional[int] = None,
     ) -> TradeOrders:
         """
         Create a purchase order with proper price calculation.
@@ -427,7 +428,7 @@ class TradeRepository:
         """
         import json
 
-        price_cents = listing.price_credits
+        price_cents = override_price_cents if override_price_cents is not None else listing.price_credits
         platform_fee_cents = int(Decimal(price_cents) * self.PLATFORM_FEE_RATE)
         seller_income_cents = price_cents - platform_fee_cents
 

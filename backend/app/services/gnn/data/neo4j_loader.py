@@ -143,7 +143,8 @@ class Neo4jGraphLoader:
         rel_filter = ""
         if relation_types:
             rel_types = "|".join(f"`{r}`" for r in relation_types)
-            rel_filter = f"AND type(r) IN [{', '.join(f\"'{r}'\" for r in relation_types)}]"
+            rel_quoted = [f"'{r}'" for r in relation_types]
+            rel_filter = f"AND type(r) IN [{', '.join(rel_quoted)}]"
 
         query = f"""
         MATCH path = (center:DataAsset {{asset_id: $asset_id}})-[r*1..{self.max_hops}]-(n)

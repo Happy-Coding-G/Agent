@@ -58,11 +58,14 @@ from app.services.trade.kg_integration import (
     RecommendationEngine,
 )
 
+from app.services.trade.unified_trade_service import UnifiedTradeService
+
 __all__ = [
     # 核心服务
     "TradeService",
     "TradeAgentService",
     "TradeNegotiationService",
+    "UnifiedTradeService",
     "NegotiationEventStore",
     "DataRightsService",
 

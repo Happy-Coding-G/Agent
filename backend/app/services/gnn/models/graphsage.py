@@ -7,6 +7,7 @@ GraphSAGE Model for Data Asset Graph Embedding
 3. 节点级和图级嵌入
 4. 边特征支持
 """
+from __future__ import annotations
 
 import torch
 import torch.nn as nn

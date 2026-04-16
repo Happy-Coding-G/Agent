@@ -29,7 +29,7 @@ from app.services.skills import (
 from app.services.user_agent_service import UserAgentService, UserAgentSettings
 
 # LangGraph imports
-from app.agents.subagents.trade.graph import create_trade_graph
+from app.agents.subagents.trade.graph import create_agent_first_trade_graph
 from app.agents.subagents.trade.state import TradeState
 
 # Agent-First imports
@@ -69,8 +69,8 @@ class TradeAgent(SpaceAwareService):
         self.negotiation_service = TradeNegotiationService(db)
         self.user_agent_service = UserAgentService(db)
         self.skills = self._init_skills()
-        # 创建LangGraph实例
-        self.graph = create_trade_graph(db, self.skills)
+        # 创建LangGraph实例（使用 Agent-First 图）
+        self.graph = create_agent_first_trade_graph(db, self.skills)
 
     def _init_skills(self) -> Dict[str, Any]:
         """初始化Skills"""
@@ -618,6 +618,78 @@ class TradeAgent(SpaceAwareService):
             "competitive": "contract_net",
         }
         return strategy_map.get(pricing_strategy, "bilateral")
+
+    async def approve_trade_task(
+        self,
+        task_id: str,
+        approved: bool,
+        user: Users,
+    ) -> Dict[str, Any]:
+        """
+        审批通过/拒绝交易任务
+
+        更新 AgentTask 的 approval_granted 标记，若批准则重新加载之前状态并继续执行图。
+        """
+        from sqlalchemy import select
+        from app.db.models import AgentTasks
+
+        try:
+            result = await self._db.execute(
+                select(AgentTasks).where(AgentTasks.public_id == task_id)
+            )
+            task = result.scalar_one_or_none()
+            if not task:
+                return {"success": False, "error": "Task not found"}
+
+            if task.created_by != user.id:
+                return {"success": False, "error": "Not authorized to approve this task"}
+
+            # 更新审批状态
+            output_data = task.output_data or {}
+            output_data["approval_granted"] = approved
+            output_data["approval_decision_at"] = datetime.utcnow().isoformat()
+            output_data["approved_by"] = user.id
+            task.output_data = output_data
+
+            if not approved:
+                task.status = "cancelled"
+                await self._db.commit()
+                return {
+                    "success": True,
+                    "approved": False,
+                    "message": "Trade task rejected by user",
+                }
+
+            # 从 output_data 中恢复之前的状态并继续执行
+            previous_state = output_data.get("pending_state", {})
+            previous_state["approval_granted"] = True
+            previous_state["approval_required"] = False
+            previous_state["result"] = previous_state.get("result", {})
+            previous_state["result"]["approval_granted"] = True
+
+            task.status = "running"
+            await self._db.commit()
+
+            final_state = await self.graph.ainvoke(previous_state)
+
+            task.status = "completed" if final_state.get("success") else "failed"
+            task_output = task.output_data or {}
+            task_output["result"] = final_state.get("result")
+            task_output["decisions"] = final_state.get("decisions", [])
+            task_output["session_id"] = final_state.get("session_id")
+            task.output_data = task_output
+            await self._db.commit()
+
+            return {
+                "success": final_state.get("success", False),
+                "approved": True,
+                "result": final_state.get("result", {}),
+                "session_id": final_state.get("session_id"),
+            }
+
+        except Exception as e:
+            logger.exception(f"Trade task approval failed: {e}")
+            return {"success": False, "error": str(e)}
 
     def _sanitize_tags(self, tags: List[str]) -> List[str]:
         """清理标签"""

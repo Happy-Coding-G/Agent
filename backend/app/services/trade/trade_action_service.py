@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ServiceError
 from app.db.models import Users
 from app.services.trade.unified_trade_service import UnifiedTradeService
-from app.services.safety import EscrowService
+from app.services.safety.escrow_service import EscrowService
 
 logger = logging.getLogger(__name__)
 
@@ -219,17 +219,53 @@ class TradeActionService:
             response="accept",
         )
 
-        # 如果接受成功，触发资金释放
+        order_id = result.get("data", {}).get("order_id") if isinstance(result.get("data"), dict) else None
+
+        # 如果接受成功，触发资金释放和订单创建（若尚未结算）
         if result.get("success"):
-            # TODO: 获取escrow_id并释放资金
-            pass
+            from app.services.trade.simple_negotiation_service import SimpleNegotiationService
+            from app.db.models import NegotiationSessions
+            from sqlalchemy import select
+
+            session_result = await self.db.execute(
+                select(NegotiationSessions).where(
+                    NegotiationSessions.negotiation_id == negotiation_id
+                )
+            )
+            session = session_result.scalar_one_or_none()
+
+            if session and session.escrow_id:
+                try:
+                    await self.escrow_service.release_to_seller(session.escrow_id)
+                except Exception as e:
+                    logger.warning(f"Escrow release failed: {e}")
+
+            # 若 respond_to_offer 未生成订单，则补充触发结算
+            if not order_id and session:
+                try:
+                    from app.services.trade.trade_service import TradeService
+                    buyer_user = await SimpleNegotiationService(self.db)._get_user(session.buyer_user_id)
+                    if buyer_user:
+                        settlement = await TradeService(self.db).purchase_negotiated(
+                            listing_id=session.listing_id,
+                            buyer=buyer_user,
+                            agreed_price_credits=session.agreed_price / 100 if session.agreed_price else 0,
+                        )
+                        if settlement.get("status") in ("completed", "already_purchased"):
+                            order_id = settlement.get("order", {}).get("order_id")
+                except Exception as e:
+                    logger.warning(f"Fallback settlement failed: {e}")
+
+            result_data = dict(result.get("data", {})) if isinstance(result.get("data"), dict) else {}
+            result_data["order_id"] = order_id
+            result["data"] = result_data
 
         return TradeActionResult(
             success=result.get("success", False),
             action=TradeAction.ACCEPT_OFFER,
             message="Offer accepted. Deal completed!" if result.get("success") else result.get("message"),
-            data=result,
-            transaction_id=negotiation_id,
+            data=result.get("data", result),
+            transaction_id=order_id or negotiation_id,
             next_actions=["confirm_purchase"],
         )
 

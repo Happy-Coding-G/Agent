@@ -110,6 +110,7 @@ class OfferResult:
     new_price: Optional[float] = None
     message: str = ""
     error: Optional[str] = None
+    order_id: Optional[str] = None
 
     # 状态
     status: NegotiationStatus = NegotiationStatus.ACTIVE
@@ -125,6 +126,7 @@ class OfferResult:
             "new_price": self.new_price,
             "message": self.message,
             "error": self.error,
+            "order_id": self.order_id,
             "status": self.status.value,
             "current_round": self.current_round,
             "remaining_rounds": self.remaining_rounds,

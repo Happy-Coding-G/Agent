@@ -31,7 +31,9 @@ from app.db.models import (
     TradeWallets,
 )
 from app.core.errors import ServiceError
-from app.services.safety import EscrowService
+from app.services.safety.escrow_service import EscrowService
+from app.services.trade.trade_service import TradeService
+from app.db.models import Users
 
 # Agent-First: 导入领域结果类型
 from app.services.trade.result_types import (
@@ -333,6 +335,13 @@ class SimpleNegotiationService:
             remaining_rounds=session.max_rounds - new_round,
         )
 
+    async def _get_user(self, user_id: int) -> Optional[Users]:
+        """根据用户ID查询用户"""
+        result = await self.db.execute(
+            select(Users).where(Users.id == user_id)
+        )
+        return result.scalar_one_or_none()
+
     async def respond_to_offer(
         self,
         negotiation_id: str,
@@ -399,6 +408,7 @@ class SimpleNegotiationService:
         # 新版本号
         new_version = session.version + 1
 
+        order_id = None
         if response == "accept":
             # 接受报价
             current_offer = shared_board.get("current_offer", {})
@@ -418,6 +428,40 @@ class SimpleNegotiationService:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "version": new_version,
             })
+
+            # 触发真实结算
+            buyer_user = await self._get_user(session.buyer_user_id)
+            if buyer_user:
+                try:
+                    trade_service = TradeService(self.db)
+                    settlement_result = await trade_service.purchase_negotiated(
+                        listing_id=session.listing_id,
+                        buyer=buyer_user,
+                        agreed_price_credits=agreed_price,
+                    )
+                    if settlement_result.get("status") == "completed":
+                        order = settlement_result.get("order", {})
+                        order_id = order.get("order_id")
+                    elif settlement_result.get("status") == "already_purchased":
+                        order = settlement_result.get("order", {})
+                        order_id = order.get("order_id")
+                    else:
+                        raise ServiceError(500, settlement_result.get("message", "Settlement failed"))
+                except Exception as e:
+                    await self.db.rollback()
+                    logger.error(f"Settlement failed during negotiation accept: {e}")
+                    return OfferResult(
+                        success=False,
+                        session_id=negotiation_id,
+                        error=f"Settlement failed: {str(e)}",
+                    )
+            else:
+                await self.db.rollback()
+                return OfferResult(
+                    success=False,
+                    session_id=negotiation_id,
+                    error="Buyer user not found",
+                )
 
             message = f"Offer accepted! Deal closed at {agreed_price}"
             status = NegotiationStatus.ACCEPTED
@@ -458,6 +502,7 @@ class SimpleNegotiationService:
             message=message,
             status=status,
             current_round=session.current_round + 1,
+            order_id=order_id,
         )
 
     async def get_negotiation_status(
