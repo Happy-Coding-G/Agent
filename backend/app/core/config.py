@@ -73,6 +73,11 @@ class Settings(BaseSettings):
         default=100, description="低于此并发量用同步模式"
     )
 
+    # 日志配置
+    LOG_DIR: Optional[str] = Field(default=None, description="日志文件存储目录，默认 backend/logs/")
+    LOG_LEVEL: str = Field(default="INFO", description="日志级别: DEBUG/INFO/WARNING/ERROR")
+    LOG_JSON_FORMAT: bool = Field(default=False, description="是否使用 JSON 格式输出日志")
+
     def _normalize_async_database_url(self, raw_url: str) -> str:
         if raw_url.startswith("postgresql+asyncpg://"):
             normalized = raw_url
