@@ -3,7 +3,9 @@ Celery 配置文件
 任务队列配置
 """
 
+from pathlib import Path
 from celery import Celery
+from celery.signals import celeryd_init
 from app.core.config import settings
 
 # 创建 Celery 应用
@@ -16,6 +18,20 @@ celery_app = Celery(
         "app.tasks",
     ],
 )
+
+
+@celeryd_init.connect
+def init_celery_logging(**kwargs) -> None:
+    """Worker 启动时初始化文件日志。"""
+    from app.core.logging_config import setup_logging
+    import logging
+
+    log_dir = Path(settings.LOG_DIR) if settings.LOG_DIR else None
+    setup_logging(
+        log_dir=log_dir,
+        level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
+        json_format=settings.LOG_JSON_FORMAT,
+    )
 
 # 配置 Celery
 celery_app.conf.update(
