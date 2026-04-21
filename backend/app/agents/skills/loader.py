@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from app.agents.skills.parser import SKILLS_DOCS_DIRS
+from app.agents.skills.parser import SKILLS_DOCS_DIRS, _SKILLS_PACKAGES_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -56,12 +56,17 @@ class SkillLoader:
 
     def _find_skill_path(self, skill_name: str) -> Optional[Path]:
         """查找 Skill 目录或文件路径。"""
-        # 先尝试目录形式: skill-name/SKILL.md
+        # 1) 优先搜索 packages/ 目录 (Claude Code 风格 skill 包)
+        pkg_path = _SKILLS_PACKAGES_DIR / skill_name / "Skill.md"
+        if pkg_path.exists():
+            return pkg_path
+
+        # 2) 再搜索 docs_dirs 中的目录形式: skill-name/SKILL.md
         for docs_dir in self.docs_dirs:
             dir_path = docs_dir / skill_name / "SKILL.md"
             if dir_path.exists():
                 return dir_path
-            # 再尝试旧版文件形式: skill-name.md
+            # 3) 旧版文件形式: skill-name.md
             file_path = docs_dir / f"{skill_name}.md"
             if file_path.exists():
                 return file_path
@@ -191,7 +196,7 @@ class SkillLoader:
             return None
 
         # 文件相对于 Skill 目录
-        if skill.path.parent.is_dir() and skill.path.name == "SKILL.md":
+        if skill.path.parent.is_dir() and skill.path.name.lower() == "skill.md":
             full_path = skill.path.parent / file_path
         else:
             # 旧版单文件模式: 使用 docs 目录作为 base
@@ -243,6 +248,14 @@ class SkillLoader:
     def list_skills(self) -> List[str]:
         """列出所有可用的 Skill 名称。"""
         skills: set = set()
+
+        # 1) Claude Code 风格 packages/ 目录
+        if _SKILLS_PACKAGES_DIR.exists():
+            for subdir in _SKILLS_PACKAGES_DIR.iterdir():
+                if subdir.is_dir() and (subdir / "Skill.md").exists():
+                    skills.add(subdir.name)
+
+        # 2) Legacy docs_dirs
         for docs_dir in self.docs_dirs:
             if not docs_dir.exists():
                 continue

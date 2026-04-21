@@ -14,9 +14,11 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-# Default directories: skills/docs (tools/skills) + subagents/docs (subagent definitions)
+# Default directories: skills/docs (legacy flat .md) + subagents/docs (subagent definitions)
 _SKILLS_DIR = Path(__file__).with_name("docs")
 _SUBAGENTS_DIR = Path(__file__).resolve().parent.parent / "subagents" / "docs"
+# New: Claude Code style skill packages (folders named after capability)
+_SKILLS_PACKAGES_DIR = Path(__file__).resolve().parent / "packages"
 SKILLS_DOCS_DIRS = [_SKILLS_DIR, _SUBAGENTS_DIR]
 
 
@@ -56,6 +58,10 @@ class SkillMDDocument:
     permission_mode: str = "plan"
     memory: Dict[str, Any] = None
 
+    # Skill package fields (Claude Code style folder structure)
+    references: Dict[str, str] = None  # {filename: content} from references/
+    package_path: Optional[Path] = None  # Path to skill package folder
+
     def __post_init__(self):
         if self.tools is None:
             self.tools = []
@@ -65,6 +71,8 @@ class SkillMDDocument:
             self.examples = []
         if self.memory is None:
             self.memory = {}
+        if self.references is None:
+            self.references = {}
 
     def to_l1_schema(self) -> Dict[str, Any]:
         """Convert to L1 lightweight schema (metadata only, ~30 words).
@@ -133,6 +141,8 @@ class SkillMDParser:
             return
 
         total_loaded = 0
+
+        # 1) Legacy flat .md files in docs_dirs (backward compatible)
         for docs_dir in self.docs_dirs:
             if not docs_dir.exists():
                 logger.debug(f"SKILL.md docs directory not found: {docs_dir}")
@@ -147,6 +157,26 @@ class SkillMDParser:
                 except Exception as e:
                     logger.warning(f"Failed to parse SKILL.md {md_path}: {e}")
 
+        # 2) Claude Code style skill packages: packages/{skill_name}/Skill.md
+        if _SKILLS_PACKAGES_DIR.exists():
+            for pkg_dir in sorted(_SKILLS_PACKAGES_DIR.iterdir()):
+                if not pkg_dir.is_dir():
+                    continue
+                skill_md = pkg_dir / "Skill.md"
+                if not skill_md.exists():
+                    continue
+                try:
+                    doc = self._parse_file(
+                        skill_md,
+                        metadata_only=metadata_only,
+                        package_dir=pkg_dir,
+                    )
+                    # Package skills take precedence over flat-file skills
+                    self._documents[doc.skill_id] = doc
+                    total_loaded += 1
+                except Exception as e:
+                    logger.warning(f"Failed to parse skill package {pkg_dir}: {e}")
+
         if metadata_only:
             self._metadata_loaded = True
         else:
@@ -154,10 +184,12 @@ class SkillMDParser:
         logger.info(
             f"Loaded {len(self._documents)} SKILL.md documents "
             f"({total_loaded} parsed, metadata_only={metadata_only}) "
-            f"from {len(self.docs_dirs)} directories"
+            f"from {len(self.docs_dirs)} directories + packages"
         )
 
-    def _parse_file(self, path: Path, metadata_only: bool = False) -> SkillMDDocument:
+    def _parse_file(
+        self, path: Path, metadata_only: bool = False, package_dir: Optional[Path] = None
+    ) -> SkillMDDocument:
         if metadata_only:
             # Stream-read only frontmatter to avoid loading large bodies
             frontmatter_text = ""
@@ -210,6 +242,7 @@ class SkillMDParser:
             suitable_scenarios: List[str] = []
             system_prompt = ""
             raw_markdown = ""
+            references: Dict[str, str] = {}
         else:
             # Extract structured sections from markdown body
             workflow_steps = self._extract_list_section(body, "工作流步骤", "workflow steps", "编排流程")
@@ -217,6 +250,20 @@ class SkillMDParser:
             # Use the full markdown body as system_prompt (Claude Code style)
             system_prompt = body
             raw_markdown = body
+            # Load references/ from skill package (Claude Code style)
+            references = {}
+            if package_dir:
+                refs_dir = package_dir / "references"
+                if refs_dir.exists() and refs_dir.is_dir():
+                    for ref_path in sorted(refs_dir.glob("*.md")):
+                        try:
+                            references[ref_path.name] = ref_path.read_text(
+                                encoding="utf-8"
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to read reference {ref_path} for {skill_id}: {e}"
+                            )
 
         return SkillMDDocument(
             skill_id=skill_id,
@@ -240,6 +287,8 @@ class SkillMDParser:
             max_rounds=max_rounds,
             permission_mode=permission_mode,
             memory=memory,
+            references=references,
+            package_path=package_dir,
         )
 
     def _extract_list_section(
