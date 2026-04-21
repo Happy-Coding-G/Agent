@@ -233,7 +233,7 @@ config.use_llm_decision = False
 POST /api/v1/spaces/{space_id}/trade/negotiations
 {
     "asset_id": "asset_123",
-    "mechanism_type": "auction",  // auction/bilateral/contract_net
+    "mechanism_type": "auction",  // auction/bilateral/direct
     "starting_price": 100,
     "reserve_price": 80,
     "max_rounds": 10

@@ -61,8 +61,8 @@ class SkillRegistry:
         self.db = db
         self._parser = parser or SkillMDParser()
 
-    def get_skill_schemas(self) -> List[Dict[str, Any]]:
-        return self._parser.get_schemas(capability_type="skill")
+    def get_skill_schemas(self, level: str = "l2") -> List[Dict[str, Any]]:
+        return self._parser.get_schemas(capability_type="skill", level=level)
 
     async def execute(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         return await execute_skill_md(name, arguments, self.db, self._parser)

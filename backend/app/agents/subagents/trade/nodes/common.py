@@ -1,168 +1,33 @@
 """
-Common Trade Nodes - Agent-First Architecture
+Common Trade Nodes - Direct Trade Mode
 
 通用交易处理节点，被多个工作流复用
 
-重要：机制选择只能通过 mechanism_selection_policy 模块进行，
-不允许本地策略映射。
+重要：机制选择已通过 policy 简化为 always direct，
+本模块保留兼容性但不再实际做复杂决策。
+"""
+"""
+Common Trade Nodes - Direct Trade Mode
+
+通用交易处理节点（select_mechanism、format_result 在 graph 中仍被引用）
 """
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
 
 from app.agents.subagents.trade.state import TradeState
 
-if TYPE_CHECKING:
-    from app.services.trade.mechanism_selection_policy import MechanismSelectionPolicy
-
 logger = logging.getLogger(__name__)
 
-# Fallback pricing heuristic constants (used when PricingSkill is unavailable)
-_PRICE_BASE = 20.0           # Base price in credits
-_PRICE_PER_NODE = 1.5        # Credits per knowledge graph node
-_PRICE_PER_EDGE = 1.2        # Credits per knowledge graph edge
-_PRICE_LENGTH_DIVISOR = 180  # Content chars per credit of length factor
-_PRICE_LENGTH_CAP = 120.0    # Max length factor contribution
-_PRICE_MIN = 5.0             # Floor price
-_PRICE_MAX = 500.0           # Ceiling price
-_PRICE_DEFAULT = 50.0        # Default when no asset info available
-
-
-async def validate_input(self, state: TradeState) -> TradeState:
-    """
-    验证输入参数
-
-    支持两种输入模式：
-    1. Agent-First: goal_type + trade_goal + trade_constraints
-    2. Legacy: action + 其他参数
-    """
-    try:
-        # 检查 Agent-First 模式
-        goal_type = state.get("goal_type")
-        trade_goal = state.get("trade_goal")
-
-        if goal_type and trade_goal:
-            # Agent-First 模式验证
-            valid_intents = ["sell_asset", "buy_asset", "price_inquiry"]
-            if goal_type not in valid_intents:
-                state["success"] = False
-                state["error"] = f"Invalid goal_type: {goal_type}. Must be one of {valid_intents}"
-                return state
-
-            state["success"] = True
-            return state
-
-        # 兼容旧模式
-        action = state.get("action")
-        if not action:
-            state["success"] = False
-            state["error"] = "Missing required field: action or goal_type"
-            return state
-
-        valid_actions = ["listing", "purchase", "auction_bid", "bilateral", "yield"]
-        if action not in valid_actions:
-            state["success"] = False
-            state["error"] = f"Invalid action: {action}. Must be one of {valid_actions}"
-            return state
-
-        state["success"] = True
-        return state
-
-    except Exception as e:
-        logger.error(f"Input validation failed: {e}")
-        state["success"] = False
-        state["error"] = str(e)
-        return state
-
-
-async def load_asset(self, state: TradeState) -> TradeState:
-    """加载资产信息"""
-    if not state.get("success"):
-        return state
-
-    try:
-        asset_id = state.get("asset_id")
-        space_id = state.get("space_public_id")
-        user_id = state.get("user_id")
-
-        if not asset_id or not space_id:
-            state["asset_info"] = None
-            return state
-
-        from app.db.models import Users
-        from sqlalchemy import select
-
-        user = None
-        if user_id:
-            result = await self.db.execute(
-                select(Users).where(Users.id == user_id)
-            )
-            user = result.scalar_one_or_none()
-
-        if user:
-            asset = await self.assets.get_asset(space_id, asset_id, user)
-            state["asset_info"] = asset
-        else:
-            logger.warning(f"User not found for user_id={user_id}, cannot load asset")
-            state["asset_info"] = None
-
-        return state
-
-    except Exception as e:
-        logger.error(f"Failed to load asset: {e}")
-        state["asset_info"] = None
-        return state
-
-
-async def calculate_price(self, state: TradeState) -> TradeState:
-    """计算建议价格"""
-    if not state.get("success"):
-        return state
-
-    try:
-        reserve_price = state.get("reserve_price")
-        if reserve_price and reserve_price > 0:
-            state["calculated_price"] = reserve_price
-            return state
-
-        asset_info = state.get("asset_info")
-        asset_id = state.get("asset_id")
-
-        if not asset_info or not asset_id:
-            state["calculated_price"] = _PRICE_DEFAULT
-            return state
-
-        try:
-            price_result = await self.skills["pricing"].calculate_quick_price(
-                asset_id=asset_id,
-                rights_types=["usage", "analysis"],
-                duration_days=365,
-            )
-            state["calculated_price"] = price_result["price_range"]["min"]
-        except Exception as e:
-            logger.warning(f"PricingSkill failed: {e}, using fallback")
-            content = asset_info.get("content_markdown", "")
-            graph = asset_info.get("graph_snapshot", {})
-            node_count = graph.get("node_count", 0)
-            edge_count = graph.get("edge_count", 0)
-            length_factor = min(len(content) / _PRICE_LENGTH_DIVISOR, _PRICE_LENGTH_CAP)
-            price = _PRICE_BASE + length_factor + node_count * _PRICE_PER_NODE + edge_count * _PRICE_PER_EDGE
-            state["calculated_price"] = max(_PRICE_MIN, min(_PRICE_MAX, price))
-
-        return state
-
-    except Exception as e:
-        logger.error(f"Price calculation failed: {e}")
-        state["calculated_price"] = _PRICE_DEFAULT
-        return state
+# Fallback pricing heuristic constants
+_PRICE_DEFAULT = 50.0
 
 
 async def select_mechanism(self, state: TradeState) -> TradeState:
     """
     选择交易机制
 
-    重要：所有机制选择必须调用 mechanism_selection_policy 模块，
-    不允许本地策略映射。
+    当前简化版本：所有交易统一使用 direct（直接交易）模式。
+    保留调用 mechanism_selection_policy 以支持未来扩展。
     """
     if not state.get("success"):
         return state
@@ -181,7 +46,7 @@ async def select_mechanism(self, state: TradeState) -> TradeState:
             goal = TradeGoal(**state.get("trade_goal", {}))
             constraints = TradeConstraints(**state.get("trade_constraints", {}))
 
-            # 使用统一策略选择机制
+            # 统一策略始终返回 direct
             mechanism = select_mechanism(
                 goal=goal,
                 constraints=constraints,
@@ -206,24 +71,18 @@ async def select_mechanism(self, state: TradeState) -> TradeState:
 
             return state
 
-        # 兼容旧模式：保留原有逻辑但简化
-        mechanism_hint = state.get("mechanism_hint")
-        if mechanism_hint:
-            state["selected_mechanism"] = mechanism_hint
-            return state
-
-        # 旧模式不使用本地策略映射，默认 bilateral
-        state["selected_mechanism"] = "bilateral"
+        # 兼容旧模式
+        state["selected_mechanism"] = "direct"
         return state
 
     except Exception as e:
         logger.error(f"Mechanism selection failed: {e}")
-        state["selected_mechanism"] = "bilateral"
+        state["selected_mechanism"] = "direct"
         state["mechanism_selection"] = {
-            "mechanism_type": "bilateral",
+            "mechanism_type": "direct",
             "engine_type": "simple",
             "selection_reason": f"Error during selection: {e}",
-            "expected_participants": 2,
+            "expected_participants": 1,
             "requires_approval": False,
         }
         return state

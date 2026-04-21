@@ -50,6 +50,7 @@ celery_app.conf.update(
     result_backend=settings.REDIS_URL or "redis://localhost:6379/0",
     result_expires=3600 * 24 * 7,  # 结果保留 7 天
     # 并发设置
+    worker_pool="threads",  # Windows 下默认使用线程池（prefork 在 Windows 会崩溃）
     worker_prefetch_multiplier=1,  # 每次只取一个任务，避免任务阻塞
     worker_max_tasks_per_child=1000,  # 每个 worker 处理 1000 个任务后重启
     # 重试设置

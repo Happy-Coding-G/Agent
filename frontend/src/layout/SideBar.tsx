@@ -10,7 +10,11 @@ import TokenUsageView from "../views/TokenUsageView";
 import SpaceManager from "../pages/SpaceManager";
 
 function GraphEditorView() {
-  return <GraphView mode="editor" showToolbar={false} />;
+  return (
+    <div style={{ height: "100%", width: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <GraphView mode="full" showToolbar={true} canvasHeight={360} />
+    </div>
+  );
 }
 
 const VIEWS = {

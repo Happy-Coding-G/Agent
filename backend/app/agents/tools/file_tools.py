@@ -1,5 +1,5 @@
 """
-File Tools - 包装 FileQueryAgent + SpaceFileService
+File Tools - 包装 query_files skill + SpaceFileService
 """
 from __future__ import annotations
 
@@ -33,9 +33,8 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
     space_path = registry.space_path
 
     async def file_search(query: str) -> Dict[str, Any]:
-        from app.agents.subagents.file_query_agent import FileQueryAgent
-        agent = FileQueryAgent(space_path or "/tmp/uploads")
-        return await agent.run(query)
+        from app.agents.subagents.file_query_agent import query_files
+        return await query_files(query=query, space_path=space_path or "/tmp/uploads")
 
     async def file_manage(
         action: str,

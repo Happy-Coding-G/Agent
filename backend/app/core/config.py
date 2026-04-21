@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: str = Field(default="https://api.deepseek.com/v1")
     DEEPSEEK_MODEL: str = Field(default="deepseek-chat")
 
+    # Qwen API (fallback for embeddings)
+    QWEN_API_KEY: str = Field(default="")
+    QWEN_BASE_URL: str = Field(default="https://dashscope.aliyuncs.com/compatible-mode/v1")
+    QWEN_EMBEDDING: str = Field(default="text-embedding-v2")
+
     # Remote Embedding (Qwen3-Embedding-4B)
     REMOTE_EMBEDDING_ENABLED: bool = Field(default=False)
     REMOTE_EMBEDDING_BASE_URL: str = Field(default="http://localhost:27701")

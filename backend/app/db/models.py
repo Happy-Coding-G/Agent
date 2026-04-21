@@ -19,6 +19,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     UniqueConstraint,
+    PrimaryKeyConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
@@ -261,6 +262,78 @@ class Users(Base):
     # Agent 配置关系
     agent_configs: Mapped[List["UserAgentConfig"]] = relationship(
         "UserAgentConfig", back_populates="user"
+    )
+
+    # Memory / Conversation relationships
+    conversation_sessions: Mapped[List["ConversationSessions"]] = relationship(
+        "ConversationSessions", back_populates="user"
+    )
+    preferences: Mapped[List["UserPreferences"]] = relationship(
+        "UserPreferences", back_populates="user"
+    )
+    memories: Mapped[List["UserMemories"]] = relationship(
+        "UserMemories", back_populates="user"
+    )
+
+    # Trade relationships
+    trade_listings: Mapped[List["TradeListings"]] = relationship(
+        "TradeListings", foreign_keys="TradeListings.seller_user_id", back_populates="seller"
+    )
+    trade_orders_buyer: Mapped[List["TradeOrders"]] = relationship(
+        "TradeOrders", foreign_keys="TradeOrders.buyer_user_id", back_populates="buyer"
+    )
+    trade_orders_seller: Mapped[List["TradeOrders"]] = relationship(
+        "TradeOrders", foreign_keys="TradeOrders.seller_user_id", back_populates="seller"
+    )
+    trade_wallet: Mapped[Optional["TradeWallets"]] = relationship(
+        "TradeWallets", back_populates="user", uselist=False
+    )
+    trade_holdings: Mapped[List["TradeHoldings"]] = relationship(
+        "TradeHoldings", back_populates="owner"
+    )
+    trade_yield_runs: Mapped[List["TradeYieldRuns"]] = relationship(
+        "TradeYieldRuns", back_populates="user"
+    )
+    trade_transactions: Mapped[List["TradeTransactionLog"]] = relationship(
+        "TradeTransactionLog", back_populates="user"
+    )
+    seller_negotiations: Mapped[List["NegotiationSessions"]] = relationship(
+        "NegotiationSessions", foreign_keys="NegotiationSessions.seller_user_id", back_populates="seller"
+    )
+    buyer_negotiations: Mapped[List["NegotiationSessions"]] = relationship(
+        "NegotiationSessions", foreign_keys="NegotiationSessions.buyer_user_id", back_populates="buyer"
+    )
+    sent_messages: Mapped[List["AgentMessageQueue"]] = relationship(
+        "AgentMessageQueue", foreign_keys="AgentMessageQueue.from_agent_user_id", back_populates="from_user"
+    )
+    received_messages: Mapped[List["AgentMessageQueue"]] = relationship(
+        "AgentMessageQueue", foreign_keys="AgentMessageQueue.to_agent_user_id", back_populates="to_user"
+    )
+    token_usages: Mapped[List["TokenUsage"]] = relationship(
+        "TokenUsage", back_populates="user", order_by="TokenUsage.created_at.desc()"
+    )
+    escrow_records_as_buyer: Mapped[List["EscrowRecord"]] = relationship(
+        "EscrowRecord", foreign_keys="[EscrowRecord.buyer_id]", back_populates="buyer"
+    )
+    escrow_records_as_seller: Mapped[List["EscrowRecord"]] = relationship(
+        "EscrowRecord", foreign_keys="[EscrowRecord.seller_id]", back_populates="seller"
+    )
+
+    # Audit / Collaboration relationships
+    lineage_created: Mapped[List["DataLineage"]] = relationship(
+        "DataLineage", back_populates="creator"
+    )
+    collaboration_ops: Mapped[List["CollaborationOperations"]] = relationship(
+        "CollaborationOperations", back_populates="user"
+    )
+    space_memberships: Mapped[List["SpaceMembers"]] = relationship(
+        "SpaceMembers", foreign_keys="SpaceMembers.user_id", back_populates="user"
+    )
+    invited_members: Mapped[List["SpaceMembers"]] = relationship(
+        "SpaceMembers", foreign_keys="SpaceMembers.invited_by", back_populates="inviter"
+    )
+    audit_logs: Mapped[List["AuditLogs"]] = relationship(
+        "AuditLogs", foreign_keys="AuditLogs.user_id", back_populates="user"
     )
 
 
@@ -794,7 +867,7 @@ class TradeOrders(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     public_id: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
 
-    listing_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    listing_id: Mapped[str] = mapped_column(String(32), ForeignKey("trade_listings.public_id"), nullable=False)
     buyer_user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
@@ -1018,22 +1091,6 @@ class TradeTransactionLog(Base):
     user: Mapped["Users"] = relationship("Users", back_populates="trade_transactions")
 
 
-# Add back-populates to Users
-Users.trade_listings = relationship(
-    "TradeListings",
-    foreign_keys=[TradeListings.seller_user_id],
-    back_populates="seller",
-)
-Users.trade_orders_buyer = relationship(
-    "TradeOrders", foreign_keys=[TradeOrders.buyer_user_id], back_populates="buyer"
-)
-Users.trade_orders_seller = relationship(
-    "TradeOrders", foreign_keys=[TradeOrders.seller_user_id], back_populates="seller"
-)
-Users.trade_wallet = relationship("TradeWallets", back_populates="user", uselist=False)
-Users.trade_holdings = relationship("TradeHoldings", back_populates="owner")
-Users.trade_yield_runs = relationship("TradeYieldRuns", back_populates="user")
-Users.trade_transactions = relationship("TradeTransactionLog", back_populates="user")
 
 
 # ============================================================================
@@ -1055,7 +1112,6 @@ mechanism_type_enum = Enum(
     "fixed_price",
     "bilateral",
     "auction",
-    "contract_net",
     "blackboard",
     name="mechanism_type",
 )
@@ -1107,7 +1163,7 @@ class NegotiationSessions(Base):
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=True
     )
 
-    # Related listing (optional for contract_net where buyer specifies requirements)
+    # Related listing (optional for auctions where buyer specifies requirements)
     listing_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     asset_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
@@ -1152,7 +1208,7 @@ class NegotiationSessions(Base):
         BigInteger
     )  # 买方期望价格
 
-    # Winner (for auctions/contract_net)
+    # Winner (for auctions)
     winner_user_id: Mapped[Optional[int]] = mapped_column(
         BigInteger, ForeignKey("users.id"), nullable=True
     )
@@ -1679,40 +1735,6 @@ class AgentIntermediateResults(Base):
     )
 
 
-# Add back-populates to Users
-Users.seller_negotiations = relationship(
-    "NegotiationSessions",
-    foreign_keys=[NegotiationSessions.seller_user_id],
-    back_populates="seller",
-)
-Users.buyer_negotiations = relationship(
-    "NegotiationSessions",
-    foreign_keys=[NegotiationSessions.buyer_user_id],
-    back_populates="buyer",
-)
-Users.sent_messages = relationship(
-    "AgentMessageQueue",
-    foreign_keys=[AgentMessageQueue.from_agent_user_id],
-    back_populates="from_user",
-)
-Users.received_messages = relationship(
-    "AgentMessageQueue",
-    foreign_keys=[AgentMessageQueue.to_agent_user_id],
-    back_populates="to_user",
-)
-Users.token_usages = relationship("TokenUsage", back_populates="user", order_by="TokenUsage.created_at.desc()")
-
-# Escrow relationships
-Users.escrow_records_as_buyer = relationship(
-    "EscrowRecord",
-    foreign_keys="[EscrowRecord.buyer_id]",
-    back_populates="buyer",
-)
-Users.escrow_records_as_seller = relationship(
-    "EscrowRecord",
-    foreign_keys="[EscrowRecord.seller_id]",
-    back_populates="seller",
-)
 
 # Memory management relationships
 ConversationSessions.user = relationship(
@@ -1860,11 +1882,12 @@ class AuditLogs(Base):
         Index("idx_audit_action", "action"),
         Index("idx_audit_time", "created_at"),
         Index("idx_audit_risk", "risk_score"),
+        PrimaryKeyConstraint("id", "created_at"),  # 分区表主键必须包含分区键
         {"postgresql_partition_by": "RANGE (created_at)"},  # 按时间分区
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    log_id: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    id: Mapped[int] = mapped_column(BigInteger, autoincrement=True, nullable=False)
+    log_id: Mapped[str] = mapped_column(String(32), nullable=False)
 
     # 用户信息
     user_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
@@ -2068,18 +2091,6 @@ class CollaborationOperations(Base):
     )  # ["client_id_1", "client_id_2"]
 
 
-# Add back-populates for new models
-Users.space_memberships = relationship(
-    "SpaceMembers", foreign_keys=[SpaceMembers.user_id], back_populates="user"
-)
-Users.invited_members = relationship(
-    "SpaceMembers", foreign_keys=[SpaceMembers.invited_by], back_populates="inviter"
-)
-Users.audit_logs = relationship(
-    "AuditLogs", foreign_keys=[AuditLogs.user_id], back_populates="user"
-)
-Users.lineage_created = relationship("DataLineage", back_populates="creator")
-Users.collaboration_ops = relationship("CollaborationOperations", back_populates="user")
 
 SpaceMembers.user = relationship(
     "Users", foreign_keys=[SpaceMembers.user_id], back_populates="space_memberships"
@@ -2897,3 +2908,38 @@ EscrowRecord.seller = relationship(
     foreign_keys="[EscrowRecord.seller_id]",
     back_populates="escrow_records_as_seller",
 )
+
+
+# ============================================================================
+# Sidechain Logs - Agent Internal Execution Logs
+# ============================================================================
+
+class SidechainLog(Base):
+    """Agent 执行过程的 Sidechain 日志。
+
+    独立记录每个 Agent 实例的内部执行过程（思考、工具调用、观察、决策），
+    与 parent session 的 conversation_messages 隔离，防止上下文污染。
+    """
+
+    __tablename__ = "sidechain_logs"
+    __table_args__ = (
+        Index("idx_sidechain_session", "session_id", "created_at"),
+        Index("idx_sidechain_parent", "parent_session_id", "agent_id"),
+        Index("idx_sidechain_event", "event_type"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    parent_session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    agent_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    event_type: Mapped[str] = mapped_column(
+        String(32), nullable=False
+    )  # thought | tool_call | observation | decision | error | task_start | task_complete | task_timeout | task_error
+
+    content: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()")
+    )

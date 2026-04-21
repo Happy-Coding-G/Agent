@@ -57,21 +57,9 @@ class AgentMessage:
 
 消息队列存储在 `TradeAgentState.message_queue` 中，由 Orchestrator 负责路由。
 
-### 4. 三种市场机制
+### 4. 两种市场机制
 
-#### 4.1 Contract Net Protocol (合同网)
-
-```
-Seller Agent                    Buyer Agent(s)
-    │                               │
-    ├── [ANNOUNCE] 任务公告 ───────►│
-    │                               │
-    │◄──────────── [BID] 投标 ─────┤
-    │                               │
-    ├── [ACCEPT/REJECT] 授予 ─────►│
-```
-
-#### 4.2 Auction (拍卖)
+#### 4.1 Auction (拍卖)
 
 ```
 Seller Agent                    Buyer Agent(s)
@@ -83,7 +71,7 @@ Seller Agent                    Buyer Agent(s)
     ├── [ACCEPT] 成交 ────────────►│
 ```
 
-#### 4.3 Bilateral Negotiation (双边协商)
+#### 4.2 Bilateral Negotiation (双边协商)
 
 ```
 Seller Agent                    Buyer Agent

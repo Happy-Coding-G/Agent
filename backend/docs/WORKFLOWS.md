@@ -132,7 +132,7 @@ User Chat: "我要卖这份数据，底价 1000"
     -> TradeAgent.run_goal
     -> TradeGoal (intent=sell_asset, min_price=1000)
     -> mechanism_selection_policy
-    -> 选择 mechanism (fixed_price / auction / bilateral / contract_net)
+    -> 选择 mechanism (fixed_price / auction / bilateral / direct)
     -> 创建/推进 NegotiationSession
     -> SellerAgent / BuyerAgent 通过 AgentMessageQueue 异步协商
     -> 达成后更新 TradeListing / TradeOrder / EscrowRecord
@@ -151,7 +151,6 @@ User Chat: "我要卖这份数据，底价 1000"
      - `fixed_price`：一口价
      - `auction`：拍卖
      - `bilateral`：双边协商
-     - `contract_net`：合同网
 
 3. **协商会话创建**
    - 若不存在，创建 `NegotiationSessions` 记录

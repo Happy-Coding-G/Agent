@@ -90,15 +90,27 @@ class AgentToolRegistry:
         self._lazy_init()
         return self._tools.get(name)
 
-    def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        """返回所有工具的 JSON schema 列表，供 LLM tool calling 使用。"""
+    def get_tool_schemas(self, level: str = "l2") -> List[Dict[str, Any]]:
+        """返回所有工具的 JSON schema 列表，供 LLM tool calling 使用。
+
+        Args:
+            level: "l1" 返回轻量元数据（name, capability_type, description），
+                   "l2" 返回完整 schema 含 parameters（默认，向后兼容）。
+        """
         self._lazy_init()
         schemas = []
         for tool in self._tools.values():
-            schema = {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.args_schema.model_json_schema() if tool.args_schema else {},
-            }
+            if level == "l1":
+                schema = {
+                    "name": tool.name,
+                    "capability_type": "tool",
+                    "description": tool.description,
+                }
+            else:
+                schema = {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.args_schema.model_json_schema() if tool.args_schema else {},
+                }
             schemas.append(schema)
         return schemas

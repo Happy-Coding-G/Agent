@@ -19,6 +19,7 @@ from sqlalchemy import select
 
 from .state import MainAgentState, AgentType, TaskStatus
 from .prompts import CAPABILITY_ROUTING_SYSTEM_PROMPT
+from app.agents.agents.protocol import AgentRequest, AgentResult
 
 logger = logging.getLogger(__name__)
 
@@ -56,13 +57,7 @@ class SubAgents:
             return
 
         try:
-            if agent_type == AgentType.FILE_QUERY and self._space_path:
-                from app.agents.subagents.file_query_agent import FileQueryAgent
-
-                self._agents[agent_type] = FileQueryAgent(self._space_path)
-                self._graphs[agent_type] = self._agents[agent_type].graph
-
-            elif agent_type == AgentType.QA:
+            if agent_type == AgentType.QA:
                 from app.agents.subagents.qa_agent import QAAgent
 
                 self._agents[agent_type] = QAAgent(self._db)
@@ -95,7 +90,6 @@ class SubAgents:
     def _lazy_init(self):
         """保留旧的 all-at-once 初始化入口，供仍需全量初始化的旧代码使用。"""
         for at in (
-            AgentType.FILE_QUERY,
             AgentType.QA,
             AgentType.REVIEW,
             AgentType.ASSET_ORGANIZE,
@@ -107,7 +101,6 @@ class SubAgents:
                 pass
 
         self._handlers = {
-            AgentType.FILE_QUERY: self._invoke_file_query,
             AgentType.QA: self._invoke_qa,
             AgentType.REVIEW: self._invoke_review,
             AgentType.ASSET_ORGANIZE: self._invoke_asset_organize,
@@ -177,15 +170,10 @@ class MainAgent:
 
         return SkillRegistry(db=self._db)
 
-    def _get_subagent_registry(self, user) -> "SubAgentRegistry":
-        from app.agents.subagents.registry import SubAgentRegistry
+    def _get_agent_registry(self) -> "AgentRegistry":
+        from app.agents.agents.registry import AgentRegistry
 
-        return SubAgentRegistry(
-            db=self._db,
-            user=user,
-            llm_client=self._llm_client,
-            space_path=self._space_path,
-        )
+        return AgentRegistry()
 
     def _build_graph(self) -> StateGraph:
         workflow = StateGraph(MainAgentState)
@@ -193,7 +181,7 @@ class MainAgent:
         workflow.add_node("plan", self._plan_step)
         workflow.add_node("execute_tool", self._execute_tool)
         workflow.add_node("execute_skill", self._execute_skill)
-        workflow.add_node("execute_subagent", self._execute_subagent)
+        workflow.add_node("execute_agent", self._execute_agent)
         workflow.add_node("respond", self._respond_step)
         workflow.add_node("handle_error", self._handle_error)
 
@@ -206,7 +194,7 @@ class MainAgent:
                 "direct": "respond",
                 "tool": "execute_tool",
                 "skill": "execute_skill",
-                "subagent": "execute_subagent",
+                "agent": "execute_agent",
                 "error": "handle_error",
             },
         )
@@ -224,7 +212,7 @@ class MainAgent:
         )
 
         workflow.add_conditional_edges(
-            "execute_subagent",
+            "execute_agent",
             self._post_execution_router,
             {"respond": "respond", "error": "handle_error"},
         )
@@ -243,7 +231,7 @@ class MainAgent:
         if state.get("active_skill"):
             return "skill"
         if state.get("active_subagent_call"):
-            return "subagent"
+            return "agent"
         return "direct"
 
     def _tool_router(self, state: MainAgentState) -> str:
@@ -279,11 +267,11 @@ class MainAgent:
             return state
 
         registry = self._get_tool_registry(user, space_id)
-        tool_schemas = registry.get_tool_schemas()
+        tool_schemas = registry.get_tool_schemas(level="l1")
         skill_registry = self._get_skill_registry()
-        skill_schemas = skill_registry.get_skill_schemas()
-        subagent_registry = self._get_subagent_registry(user)
-        subagent_schemas = subagent_registry.get_subagent_schemas()
+        skill_schemas = skill_registry.get_skill_schemas(level="l1")
+        agent_registry = self._get_agent_registry()
+        agent_schemas = agent_registry.get_agent_schemas(level="l1")
 
         intent = self._simple_intent_detection(user_request)
         state["intent"] = intent
@@ -296,8 +284,8 @@ class MainAgent:
             system_prompt = CAPABILITY_ROUTING_SYSTEM_PROMPT.format(
                 tool_schemas=json.dumps(tool_schemas, ensure_ascii=False, indent=2),
                 skill_schemas=json.dumps(skill_schemas, ensure_ascii=False, indent=2),
-                subagent_schemas=json.dumps(
-                    subagent_schemas, ensure_ascii=False, indent=2
+                agent_schemas=json.dumps(
+                    agent_schemas, ensure_ascii=False, indent=2
                 ),
                 user_id=user_id,
                 space_id=space_id or "none",
@@ -366,7 +354,6 @@ class MainAgent:
             return state
 
         tool_map = {
-            AgentType.FILE_QUERY: ("file_search", {"query": user_request}),
             AgentType.REVIEW: (
                 "review_document",
                 {"doc_id": "", "review_type": "standard"},
@@ -406,7 +393,7 @@ class MainAgent:
                 mode = decision.get("mode")
                 if mode == "direct":
                     return {"mode": "direct", "answer": decision.get("answer", "")}
-                if mode in {"tool", "skill", "subagent"}:
+                if mode in {"tool", "skill", "agent", "subagent"}:
                     return {
                         "mode": mode,
                         "name": decision.get("name"),
@@ -529,9 +516,10 @@ class MainAgent:
 
         return state
 
-    async def _execute_subagent(self, state: MainAgentState) -> MainAgentState:
-        active_subagent = state.get("active_subagent_call")
-        if not active_subagent:
+    async def _execute_agent(self, state: MainAgentState) -> MainAgentState:
+        """通过 AgentRegistry 执行 Agent 任务（独立会话模式）。"""
+        active_agent = state.get("active_subagent_call")
+        if not active_agent:
             return state
 
         user_id = state.get("user_id")
@@ -548,24 +536,107 @@ class MainAgent:
             return state
 
         try:
-            registry = self._get_subagent_registry(user)
-            # 注入 session_id（若存在）
-            arguments = dict(active_subagent.get("arguments", {}))
-            if state.get("session_id"):
-                arguments["session_id"] = state["session_id"]
-            result = await registry.execute(
-                active_subagent.get("name"),
-                arguments,
+            registry = self._get_agent_registry()
+
+            # 构建上下文摘要（不传递完整历史）
+            context_summary = await self._build_context_summary(state)
+
+            # 创建 Agent 请求
+            request = AgentRequest(
+                agent_id=active_agent.get("name"),
+                task_description=state.get("user_request", ""),
+                arguments=active_agent.get("arguments", {}),
+                parent_session_id=state.get("session_id", ""),
+                context_summary=context_summary,
+                user_id=user_id,
+                space_id=state.get("space_id"),
             )
+
+            # 通过 AgentRegistry 执行（独立会话）
+            result = await registry.execute_agent(
+                request,
+                db=self._db,
+                llm_client=self._llm_client,
+            )
+
+            # 记录结果
             sr = state.get("subagent_results", [])
-            sr.append(result)
+            sr.append({
+                "agent": active_agent.get("name"),
+                "success": result.success,
+                "summary": result.summary,
+                "artifacts": result.artifacts,
+                "error": result.error,
+                "sidechain_id": result.sidechain_id,
+            })
             state["subagent_results"] = sr
             state["active_subagent_call"] = None
+
+            # 将摘要存入最终答案
+            if result.success:
+                state["final_answer"] = result.summary
+
+            # 记录到记忆层
+            if self._memory:
+                await self._memory.log_event(
+                    event_type="agent_invoked",
+                    payload={
+                        "agent_id": active_agent.get("name"),
+                        "success": result.success,
+                        "summary": result.summary[:200],
+                    },
+                    session_id=state.get("session_id"),
+                    agent_type="main",
+                )
+
         except Exception as e:
-            logger.exception(f"Subagent execution failed: {e}")
+            logger.exception(f"Agent execution failed: {e}")
             state["error"] = str(e)
 
         return state
+
+    async def _build_context_summary(self, state: MainAgentState) -> str:
+        """构建传递给 Agent 的上下文摘要。
+
+        原则：
+        - 只包含 Agent 完成任务所需的关键信息
+        - 不包含完整的对话历史
+        - 不包含与当前任务无关的记忆
+        - 长度控制在 1000-2000 token
+        """
+        parts = []
+
+        # 1. 当前用户请求
+        parts.append(f"用户请求: {state.get('user_request', '')}")
+
+        # 2. 用户意图（如果已识别）
+        if state.get("intent"):
+            parts.append(f"识别意图: {state['intent'].value}")
+
+        # 3. 相关记忆（从 L5 检索）
+        if self._memory:
+            try:
+                relevant_memories = await self._memory.longterm.search_memories(
+                    user_id=state.get("user_id", 0),
+                    query=state.get("user_request", ""),
+                    limit=3,
+                )
+                if relevant_memories:
+                    parts.append("相关历史:\n" + "\n".join(
+                        m.get("content", "") for m in relevant_memories
+                    ))
+            except Exception:
+                pass
+
+        # 4. 最近 2-3 轮对话（非完整历史）
+        recent_messages = state.get("conversation_history", [])[-6:]
+        if recent_messages:
+            parts.append("最近对话:\n" + "\n".join(
+                f"{m.get('role', 'unknown')}: {m.get('content', '')[:100]}"
+                for m in recent_messages
+            ))
+
+        return "\n\n".join(parts)
 
     async def _respond_step(self, state: MainAgentState) -> MainAgentState:
         """基于 capability 执行结果或直接回复生成最终中文回复。"""
@@ -604,7 +675,8 @@ class MainAgent:
                 for r in skill_results
             )
             summary_parts.extend(
-                f"【subagent:{r['subagent']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
+                f"【agent:{r.get('agent', r.get('subagent', 'unknown'))}】"
+                f"{'✓' if r.get('success') else '✗'} {r.get('summary', '')}"
                 for r in subagent_results
             )
             state["task_result"] = {
@@ -615,12 +687,21 @@ class MainAgent:
             return state
 
         try:
+            # 构建更友好的 capability 结果摘要
+            agent_summaries = []
+            for r in subagent_results:
+                agent_name = r.get("agent", r.get("subagent", "unknown"))
+                if r.get("success"):
+                    agent_summaries.append(f"Agent '{agent_name}' 执行成功: {r.get('summary', '')}")
+                else:
+                    agent_summaries.append(f"Agent '{agent_name}' 执行失败: {r.get('error', '未知错误')}")
+
             prompt = (
                 "你是一个 helpful 的 AI 助手。根据用户的请求和能力执行结果，生成一段自然、简洁的中文回复。\n\n"
                 f"用户请求：{user_request}\n\n"
-                "能力执行结果：\n"
-                f"{json.dumps(capability_results, ensure_ascii=False, indent=2)}\n\n"
-                "请直接回复用户，不要暴露内部 capability 名称和 JSON 结构："
+                "执行结果摘要：\n"
+                + "\n".join(agent_summaries)
+                + "\n\n请直接回复用户，不要暴露内部 capability 名称和 JSON 结构："
             )
             response = await self._llm_client.ainvoke(prompt)
             content = (
@@ -640,7 +721,8 @@ class MainAgent:
                 for r in skill_results
             )
             summary_parts.extend(
-                f"【subagent:{r['subagent']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
+                f"【agent:{r.get('agent', r.get('subagent', 'unknown'))}】"
+                f"{'✓' if r.get('success') else '✗'} {r.get('summary', '')}"
                 for r in subagent_results
             )
             state["task_result"] = {
@@ -768,8 +850,9 @@ class MainAgent:
 
         qa_agent = None
         try:
-            self.subagents._ensure_agent(AgentType.QA)
-            qa_agent = self.subagents._agents.get(AgentType.QA)
+            # 直接实例化 QAAgent（不通过旧的 SubAgents）
+            from app.agents.subagents.qa_agent import QAAgent
+            qa_agent = QAAgent(self._db)
         except Exception as e:
             logger.exception(f"Failed to initialize QA Agent: {e}")
             yield {"type": "error", "data": f"QA Agent initialization failed: {e}"}

@@ -1,5 +1,5 @@
 """
-Tests for TradeAgent graph binding.
+Tests for TradeAgent graph binding (Direct Trade Mode).
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,10 +9,10 @@ from app.agents.subagents.trade.agent import TradeAgent
 
 class TestTradeAgent:
     @pytest.mark.asyncio
-    async def test_trade_agent_uses_agent_first_graph(self):
+    async def test_trade_agent_uses_direct_trade_graph(self):
         mock_db = AsyncMock()
         with patch(
-            "app.agents.subagents.trade.agent.create_agent_first_trade_graph"
+            "app.agents.subagents.trade.agent.create_direct_trade_graph"
         ) as mock_create_graph, patch.object(
             TradeAgent, "_init_skills", return_value={"pricing": AsyncMock()}
         ):
@@ -29,7 +29,7 @@ class TestTradeAgent:
         """回归测试：execute_trade_goal 接收并透传 session_id。"""
         mock_db = AsyncMock()
         with patch(
-            "app.agents.subagents.trade.agent.create_agent_first_trade_graph"
+            "app.agents.subagents.trade.agent.create_direct_trade_graph"
         ) as mock_create_graph, patch.object(
             TradeAgent, "_init_skills", return_value={"pricing": AsyncMock()}
         ), patch.object(
@@ -42,10 +42,10 @@ class TestTradeAgent:
                 "calculated_price": 100.0,
                 "session_id": "sess_trade_1",
                 "mechanism_selection": {
-                    "mechanism_type": "bilateral",
+                    "mechanism_type": "direct",
                     "engine_type": "simple",
                     "selection_reason": "test",
-                    "expected_participants": 2,
+                    "expected_participants": 1,
                     "requires_approval": False,
                 },
             })
@@ -75,7 +75,7 @@ class TestTradeAgent:
         """回归测试：run() 透传 session_id 并同步记忆。"""
         mock_db = AsyncMock()
         with patch(
-            "app.agents.subagents.trade.agent.create_agent_first_trade_graph"
+            "app.agents.subagents.trade.agent.create_direct_trade_graph"
         ) as mock_create_graph, patch.object(
             TradeAgent, "_init_skills", return_value={"pricing": AsyncMock()}
         ), patch.object(
@@ -86,7 +86,7 @@ class TestTradeAgent:
                 "success": True,
                 "result": {"offer": 99},
                 "calculated_price": 99.0,
-                "selected_mechanism": "bilateral",
+                "selected_mechanism": "direct",
             })
             mock_create_graph.return_value = mock_graph
 
@@ -107,10 +107,10 @@ class TestTradeAgent:
 
     @pytest.mark.asyncio
     async def test_sync_trade_memory_writes_l3_and_l4(self):
-        """回归测试：_sync_trade_memory 写入 L3 shared_board / approval_state 和 L4 事件。"""
+        """回归测试：_sync_trade_memory 写入 L3 trade_result / approval_state 和 L4 事件。"""
         mock_db = AsyncMock()
         with patch(
-            "app.agents.subagents.trade.agent.create_agent_first_trade_graph"
+            "app.agents.subagents.trade.agent.create_direct_trade_graph"
         ) as mock_create_graph, patch.object(
             TradeAgent, "_init_skills", return_value={"pricing": AsyncMock()}
         ):
@@ -123,8 +123,7 @@ class TestTradeAgent:
 
             final_state = {
                 "calculated_price": 150.0,
-                "selected_mechanism": "bilateral",
-                "negotiation_id": "neg_1",
+                "selected_mechanism": "direct",
                 "plan_id": "plan_1",
                 "approval_required": True,
                 "approval_status": "pending",
@@ -144,10 +143,10 @@ class TestTradeAgent:
                 session_id="sess_t",
             )
 
-            # L3: shared_board
-            l3_shared = mock_memory.set_working_memory.call_args_list[0]
-            assert l3_shared.kwargs["key"] == "shared_board"
-            assert l3_shared.kwargs["value"]["current_price"] == 150.0
+            # L3: trade_result
+            l3_trade = mock_memory.set_working_memory.call_args_list[0]
+            assert l3_trade.kwargs["key"] == "trade_result"
+            assert l3_trade.kwargs["value"]["current_price"] == 150.0
 
             # L3: approval_state
             l3_approval = mock_memory.set_working_memory.call_args_list[1]
@@ -157,4 +156,4 @@ class TestTradeAgent:
             # L4: events
             event_types = [call.kwargs["event_type"] for call in mock_memory.log_event.call_args_list]
             assert "approval_required" in event_types
-            assert "trade_offer" in event_types
+            assert "trade_executed" in event_types

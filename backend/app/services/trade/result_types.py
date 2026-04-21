@@ -26,17 +26,13 @@ class NegotiationStatus(str, Enum):
 
 
 class MechanismType(str, Enum):
-    """机制类型"""
-    BILATERAL = "bilateral"
-    AUCTION = "auction"
-    CONTRACT_NET = "contract_net"
+    """机制类型（当前仅支持 direct）"""
     DIRECT = "direct"
 
 
 class EngineType(str, Enum):
     """引擎类型"""
     SIMPLE = "simple"
-    EVENT_SOURCED = "event_sourced"
 
 
 @dataclass
@@ -49,13 +45,12 @@ class NegotiationResult:
     success: bool
     session_id: Optional[str] = None
     status: NegotiationStatus = NegotiationStatus.PENDING
-    mechanism: MechanismType = MechanismType.BILATERAL
+    mechanism: MechanismType = MechanismType.DIRECT
     engine: EngineType = EngineType.SIMPLE
 
     # 参与者
     seller_id: Optional[int] = None
     buyer_id: Optional[int] = None
-    winner_id: Optional[int] = None
 
     # 价格信息
     current_price: Optional[float] = None
@@ -88,7 +83,6 @@ class NegotiationResult:
             "engine": self.engine.value,
             "seller_id": self.seller_id,
             "buyer_id": self.buyer_id,
-            "winner_id": self.winner_id,
             "current_price": self.current_price,
             "agreed_price": self.agreed_price,
             "current_round": self.current_round,
@@ -135,7 +129,7 @@ class OfferResult:
 
 @dataclass
 class BidResult:
-    """出价结果（拍卖）"""
+    """出价结果（拍卖）- 已废弃，保留结构用于兼容性"""
     success: bool
     session_id: str
     bid_sequence: int = 0
@@ -191,7 +185,7 @@ class SessionState:
     bid_count: int = 0
 
     # 引擎特定
-    version: int = 1  # 简化版乐观锁版本号
+    version: int = 1
     shared_board: Dict[str, Any] = field(default_factory=dict)
     audit_log: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -269,6 +263,7 @@ class EngineCapabilities:
 # 便捷函数
 # ============================================================================
 
+
 def create_success_result(
     session_id: str,
     message: str = "Success",
@@ -297,20 +292,11 @@ def create_error_result(
 
 
 # 引擎能力定义
-BILATERAL_ENGINE_CAPABILITIES = EngineCapabilities(
+DIRECT_ENGINE_CAPABILITIES = EngineCapabilities(
     engine_type=EngineType.SIMPLE,
     supports_concurrent_bids=False,
     supports_full_audit=False,
-    optimistic_locking=True,
+    optimistic_locking=False,
     max_participants=2,
-    best_for="1对1双边协商，低并发场景",
-)
-
-AUCTION_ENGINE_CAPABILITIES = EngineCapabilities(
-    engine_type=EngineType.EVENT_SOURCED,
-    supports_concurrent_bids=True,
-    supports_full_audit=True,
-    optimistic_locking=True,
-    max_participants=1000,
-    best_for="1对N拍卖，高并发场景",
+    best_for="直接交易，Agent 评估后一键下单",
 )

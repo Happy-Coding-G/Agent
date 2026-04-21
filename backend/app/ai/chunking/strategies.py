@@ -153,6 +153,17 @@ class SectionPackStrategy(ChunkingStrategy):
                 # Start new block for heading
                 current_block_lines = [line]
                 current_block_start = text.index(line)
+            else:
+                # Accumulate non-heading lines into the current block
+                if not current_block_lines:
+                    current_block_start = text.index(line)
+                current_block_lines.append(line)
+
+        # Flush remaining lines after loop ends
+        if current_block_lines:
+            block_text = "\n".join(current_block_lines)
+            if block_text.strip():
+                blocks.append((block_text.strip(), current_block_start, 0))
 
         return blocks
 

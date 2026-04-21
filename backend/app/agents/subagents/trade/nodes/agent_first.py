@@ -1,20 +1,16 @@
 """
-Agent-First Trade Nodes
+Agent-First Trade Nodes - Direct Trade Mode
 
-Agent-First 架构的新交易处理节点。
-
-这些节点实现了完整的交易目标执行链路：
-normalize_goal -> load_user_config -> load_asset_context -> evaluate_market -> evaluate_risk
--> select_mechanism -> create_session -> run_negotiation -> check_approval -> settle_or_continue -> publish_state
+直接交易处理节点：用户输入意图 -> Agent 检索评估 -> 直接下单
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
 
 from sqlalchemy import select, func
 
 from app.agents.subagents.trade.state import TradeState
-from app.db.models import TradeOrders, TradeListings, AgentTasks
+from app.db.models import DataAssets, TradeOrders, TradeListings, AgentTasks
 
 logger = logging.getLogger(__name__)
 
@@ -28,18 +24,26 @@ async def normalize_goal(self, state: TradeState) -> TradeState:
     try:
         goal = state.get("trade_goal", {})
 
-        # 标准化价格
+        # 标准化价格（避免未提供价格时产生 0）
         target_price = goal.get("target_price")
         if target_price is None:
             if goal.get("intent") == "sell_asset":
-                goal["target_price"] = goal.get("min_price", 0) * 1.1
+                min_price = goal.get("min_price")
+                if min_price and min_price > 0:
+                    goal["target_price"] = min_price * 1.1
+                else:
+                    goal["target_price"] = 50.0
             elif goal.get("intent") == "buy_asset":
-                goal["target_price"] = goal.get("max_price", 0) * 0.9
+                max_price = goal.get("max_price")
+                if max_price and max_price > 0:
+                    goal["target_price"] = max_price * 0.9
+                else:
+                    goal["target_price"] = 50.0
 
         # 标准化截止时间
         deadline = goal.get("deadline")
         if not deadline:
-            goal["deadline"] = (datetime.utcnow() + timedelta(days=7)).isoformat()
+            goal["deadline"] = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
 
         state["trade_goal"] = goal
         state["current_step"] = "normalize_goal"
@@ -49,7 +53,7 @@ async def normalize_goal(self, state: TradeState) -> TradeState:
             state["decisions"] = []
         state["decisions"].append({
             "type": "normalize_goal",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         })
 
         return state
@@ -80,19 +84,15 @@ async def load_user_config(self, state: TradeState) -> TradeState:
         try:
             settings = await user_agent_service.get_user_agent_settings(user_id)
             state["user_config"] = {
-                "auto_negotiate": settings.trade_auto_negotiate,
-                "min_profit_margin": settings.trade_min_profit_margin,
-                "max_budget_ratio": settings.trade_max_budget_ratio,
-                "max_rounds": settings.trade_max_rounds,
-                "temperature": settings.temperature,
+                "auto_trade": getattr(settings, "trade_auto_negotiate", False),
+                "max_budget_ratio": getattr(settings, "trade_max_budget_ratio", 1.0),
+                "temperature": getattr(settings, "temperature", 0.7),
             }
         except Exception:
             # 使用默认配置
             state["user_config"] = {
-                "auto_negotiate": False,
-                "min_profit_margin": 0.1,
+                "auto_trade": True,
                 "max_budget_ratio": 1.0,
-                "max_rounds": 10,
                 "temperature": 0.7,
             }
 
@@ -119,9 +119,21 @@ async def load_asset_context(self, state: TradeState) -> TradeState:
             state["asset_context"] = None
             return state
 
-        # 加载资产信息
-        asset_info = await self.assets.get_asset_by_id(asset_id)
-        state["asset_context"] = asset_info
+        # 加载资产信息（直接通过 asset_id 查询）
+        result = await self.db.execute(
+            select(DataAssets).where(DataAssets.asset_id == asset_id)
+        )
+        asset = result.scalar_one_or_none()
+        if asset:
+            state["asset_context"] = {
+                "asset_id": asset.asset_id,
+                "space_public_id": asset.space_public_id or "",
+                "title": asset.asset_name,
+                "content_markdown": asset.content_markdown or "",
+                "graph_snapshot": asset.graph_snapshot or {},
+            }
+        else:
+            state["asset_context"] = None
 
         # 加载资产血缘（如果 skill 可用）
         if "lineage" in self.skills:
@@ -157,7 +169,7 @@ async def evaluate_market(self, state: TradeState) -> TradeState:
             "market_liquidity": "medium",
             "recent_trades_count": 0,
             "active_listings_count": 0,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
         # 如果有市场分析 skill，使用它
@@ -221,7 +233,7 @@ async def evaluate_risk(self, state: TradeState) -> TradeState:
 
         # 用户风险
         user_config = state.get("user_config", {})
-        if not user_config.get("auto_negotiate", False):
+        if not user_config.get("auto_trade", True):
             risk_factors.append("manual_mode")
 
         # 查询真实订单数据计算信任分
@@ -283,145 +295,141 @@ async def evaluate_risk(self, state: TradeState) -> TradeState:
         return state
 
 
-async def create_session(self, state: TradeState) -> TradeState:
+async def execute_direct_trade(self, state: TradeState) -> TradeState:
     """
-    创建或恢复协商会话
+    执行直接交易
 
-    根据选择的机制创建对应的协商会话。
-    根据 goal.intent 和机制类型正确分配 buyer/seller 角色。
+    直接交易逻辑：
+    1. 买方意图 -> 检索匹配资产
+    2. 评估价格/信誉 -> 若合适则创建订单
+    3. 卖方意图 -> 创建上架记录
+
+    无需协商会话，一步完成。
     """
     try:
         if not state.get("success"):
             return state
 
-        mechanism = state.get("selected_mechanism", "bilateral")
-        engine_type = state.get("engine_type", "simple")
         goal = state.get("trade_goal", {})
         intent = goal.get("intent")
         user_id = state.get("user_id")
+        asset_id = goal.get("asset_id")
         listing_id = goal.get("listing_id")
 
-        session_id = None
+        if intent == "buy_asset":
+            # 买方：检索 -> 评估 -> 下单
+            result = await _execute_buy_direct(self, state, user_id, asset_id, listing_id, goal)
+            state["result"] = result
 
-        if mechanism == "direct":
-            # 直接交易，不需要会话
-            state["session_id"] = None
-            state["current_step"] = "direct_trade"
-            return state
+        elif intent == "sell_asset":
+            # 卖方：创建上架记录
+            result = await _execute_sell_direct(self, state, user_id, asset_id, goal)
+            state["result"] = result
 
-        elif engine_type == "simple" or mechanism == "bilateral":
-            # 双边协商
-            if intent == "sell_asset":
-                state["success"] = False
-                state["error"] = "Bilateral negotiation can only be initiated by buyer"
-                return state
-
-            from app.services.trade.simple_negotiation_service import SimpleNegotiationService
-            service = SimpleNegotiationService(self.db)
-            result = await service.create_negotiation(
-                buyer_id=user_id,
-                listing_id=listing_id,
-                requirements={
-                    "max_budget": goal.get("max_price"),
-                    "preferred_price": goal.get("target_price"),
-                    "message": "Auto-created by TradeAgent",
-                },
-            )
-            session_id = result.get("negotiation_id")
-
-        elif mechanism == "auction":
-            # 拍卖
-            from app.services.trade.hybrid_negotiation_service import HybridNegotiationService
-
-            seller_id = None
-            if intent == "sell_asset":
-                seller_id = user_id
-            elif intent == "buy_asset":
-                # 买方发起拍卖购买时，需查询 listing 的真实卖方
-                if listing_id:
-                    listing_result = await self.db.execute(
-                        select(TradeListings).where(TradeListings.public_id == listing_id)
-                    )
-                    listing = listing_result.scalar_one_or_none()
-                    if listing:
-                        seller_id = listing.seller_user_id
-                    else:
-                        state["success"] = False
-                        state["error"] = f"Listing not found: {listing_id}"
-                        return state
-                else:
-                    state["success"] = False
-                    state["error"] = "listing_id is required for auction purchase"
-                    return state
-
-            service = HybridNegotiationService(self.db)
-            result = await service.create_negotiation(
-                mechanism_type="auction",
-                seller_id=seller_id,
-                buyer_id=None if intent == "sell_asset" else user_id,
-                listing_id=listing_id,
-                config={
-                    "starting_price": goal.get("min_price", 0),
-                    "reserve_price": goal.get("min_price", 0),
-                    "requires_audit": True,
-                },
-                expected_participants=state.get("mechanism_selection", {}).get("expected_participants", 2),
-            )
-            session_id = result.get("session_id")
-
-        state["session_id"] = session_id
-        state["current_step"] = "create_session"
-
-        # 记录决策
-        if "decisions" not in state:
-            state["decisions"] = []
-        state["decisions"].append({
-            "type": "session_created",
-            "session_id": session_id,
-            "mechanism": mechanism,
-            "engine": engine_type,
-        })
-
-        return state
-
-    except Exception as e:
-        logger.error(f"Session creation failed: {e}")
-        state["success"] = False
-        state["error"] = f"Session creation failed: {e}"
-        return state
-
-
-async def run_negotiation(self, state: TradeState) -> TradeState:
-    """
-    执行协商回合
-
-    根据当前状态执行一轮协商。
-    """
-    try:
-        session_id = state.get("session_id")
-        if not session_id:
-            # 直接交易模式
+        else:
+            # 价格查询等其他意图
             state["result"] = {
-                "status": "direct",
-                "message": "Direct trade, no negotiation needed",
+                "success": True,
+                "status": "inquiry",
+                "message": "Price inquiry completed",
+                "asset_context": state.get("asset_context"),
+                "market_context": state.get("market_context"),
             }
-            return state
 
-        # 这里应该调用协商执行逻辑
-        # 简化实现：返回等待对方响应状态
-        state["result"] = {
-            "status": "pending",
-            "session_id": session_id,
-            "message": "Negotiation initiated, waiting for counterparty",
-        }
-        state["current_step"] = "run_negotiation"
-
+        state["current_step"] = "execute_direct_trade"
         return state
 
     except Exception as e:
-        logger.error(f"Negotiation execution failed: {e}")
-        state["result"] = {"status": "error", "error": str(e)}
+        logger.error(f"Direct trade execution failed: {e}")
+        state["success"] = False
+        state["error"] = f"Direct trade execution failed: {e}"
         return state
+
+
+async def _execute_buy_direct(self, state, user_id, asset_id, listing_id, goal) -> Dict[str, Any]:
+    """执行买方直接交易"""
+    from app.repositories.trade_repo import TradeRepository
+
+    repo = TradeRepository(self.db)
+
+    # 1. 检索匹配资产
+    matched_assets = []
+    if listing_id:
+        # 直接指定 listing
+        listing_result = await self.db.execute(
+            select(TradeListings).where(TradeListings.public_id == listing_id)
+        )
+        listing = listing_result.scalar_one_or_none()
+        if listing:
+            matched_assets.append({
+                "listing_id": listing.public_id,
+                "asset_id": listing.asset_id,
+                "price": listing.price,
+                "seller_id": listing.seller_user_id,
+            })
+    elif asset_id:
+        # 按资产ID查找
+        listings_result = await self.db.execute(
+            select(TradeListings).where(
+                (TradeListings.asset_id == asset_id) &
+                (TradeListings.status == "active")
+            )
+        )
+        listings = listings_result.scalars().all()
+        for l in listings:
+            matched_assets.append({
+                "listing_id": l.public_id,
+                "asset_id": l.asset_id,
+                "price": l.price,
+                "seller_id": l.seller_user_id,
+            })
+
+    if not matched_assets:
+        return {
+            "success": False,
+            "status": "no_match",
+            "message": "未找到符合条件的资产上架记录",
+        }
+
+    # 2. 选择最优匹配（价格最低且卖家信誉良好）
+    best_match = min(matched_assets, key=lambda x: x["price"] or float("inf"))
+
+    # 3. 检查预算
+    budget_max = goal.get("max_price", float("inf"))
+    if best_match["price"] and best_match["price"] > budget_max:
+        return {
+            "success": False,
+            "status": "over_budget",
+            "message": f"最低价格 {best_match['price']} 超出预算 {budget_max}",
+            "best_match": best_match,
+        }
+
+    # 4. 创建订单（等待审批或直接完成）
+    # 实际创建订单逻辑由 settle_or_continue 处理
+    return {
+        "success": True,
+        "status": "order_ready",
+        "message": f"找到匹配资产，价格 {best_match['price']}",
+        "listing_id": best_match["listing_id"],
+        "asset_id": best_match["asset_id"],
+        "price": best_match["price"],
+        "seller_id": best_match["seller_id"],
+        "action": "create_order",
+    }
+
+
+async def _execute_sell_direct(self, state, user_id, asset_id, goal) -> Dict[str, Any]:
+    """执行卖方直接上架"""
+    price = goal.get("target_price", goal.get("min_price", 0))
+
+    return {
+        "success": True,
+        "status": "listing_ready",
+        "message": f"资产上架准备完成，定价 {price}",
+        "asset_id": asset_id,
+        "price": price,
+        "action": "create_listing",
+    }
 
 
 async def check_approval(self, state: TradeState) -> TradeState:
@@ -430,6 +438,11 @@ async def check_approval(self, state: TradeState) -> TradeState:
 
     调用真实审批策略服务，若需要审批则持久化到 AgentTask。
     """
+    # 若已从审批流程恢复，直接跳过避免循环
+    if state.get("approval_granted"):
+        state["approval_required"] = False
+        return state
+
     try:
         goal_dict = state.get("trade_goal", {})
         constraints_dict = state.get("trade_constraints", {})
@@ -458,12 +471,13 @@ async def check_approval(self, state: TradeState) -> TradeState:
                 "trigger": decision.trigger.value if decision.trigger else None,
                 "policy_applied": decision.policy_applied,
                 "requires_action": True,
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
             }
             state["pending_decision"] = pending_decision
             state["result"] = {
+                "success": True,
                 "status": "pending_approval",
-                "message": f"Waiting for user approval: {decision.reason}",
+                "message": f"等待用户审批: {decision.reason}",
                 "decision": pending_decision,
             }
 
@@ -479,6 +493,14 @@ async def check_approval(self, state: TradeState) -> TradeState:
                         task.status = "pending_approval"
                         existing_output = task.output_data or {}
                         existing_output["pending_decision"] = pending_decision
+                        # 保存完整状态用于审批恢复（处理 datetime 不可序列化问题）
+                        pending_state = {}
+                        for k, v in state.items():
+                            if isinstance(v, datetime):
+                                pending_state[k] = v.isoformat()
+                            else:
+                                pending_state[k] = v
+                        existing_output["pending_state"] = pending_state
                         task.output_data = existing_output
                         await self.db.commit()
                 except Exception as e:
@@ -499,6 +521,13 @@ async def check_approval(self, state: TradeState) -> TradeState:
 
     except Exception as e:
         logger.error(f"Approval check failed: {e}")
+        state["approval_required"] = True
+        state["pending_decision"] = {
+            "type": "approval_required",
+            "reason": f"Approval service error: {e}",
+            "requires_action": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
         return state
 
 
@@ -506,23 +535,32 @@ async def settle_or_continue(self, state: TradeState) -> TradeState:
     """
     结算或继续
 
-    根据当前状态决定是结算还是继续协商。
-    若存在 pending_approval 但未批准，则阻止结算。
+    直接交易模式：检查审批通过后直接执行订单/上架创建。
     """
     try:
-        result = state.get("result", {})
+        result = state.get("result") or {}
         status = result.get("status")
 
         # 检查审批是否通过
         if state.get("approval_required") and not result.get("approval_granted"):
-            state["success"] = False
-            state["error"] = "Settlement blocked: approval required but not granted"
+            # 审批未通过，阻止结算但不报错
+            state["result"]["settled"] = False
+            state["result"]["message"] = "等待用户审批"
             return state
 
-        if status in ["accepted", "completed"]:
-            # 执行结算
+        # 直接执行交易
+        if status in ["order_ready", "listing_ready"]:
+            action = result.get("action")
+
+            if action == "create_order":
+                # 创建订单
+                await _create_order(self, state, result)
+            elif action == "create_listing":
+                # 创建上架
+                await _create_listing(self, state, result)
+
             result["settled"] = True
-            result["settled_at"] = datetime.utcnow().isoformat()
+            result["settled_at"] = datetime.now(timezone.utc).isoformat()
 
             # 记录决策
             if "decisions" not in state:
@@ -533,13 +571,14 @@ async def settle_or_continue(self, state: TradeState) -> TradeState:
                 "result": result,
             })
 
-        elif status == "rejected":
-            # 协商失败
-            result["settled"] = False
+        elif status == "no_match":
             state["success"] = False
-            state["error"] = "Negotiation rejected"
+            state["error"] = result.get("message", "未找到匹配资产")
 
-        # 其他状态：继续协商
+        elif status == "over_budget":
+            state["success"] = False
+            state["error"] = result.get("message", "超出预算")
+
         state["current_step"] = "settle_or_continue"
         return state
 
@@ -548,6 +587,108 @@ async def settle_or_continue(self, state: TradeState) -> TradeState:
         state["success"] = False
         state["error"] = f"Settlement failed: {e}"
         return state
+
+
+async def _create_order(self, state, result: Dict[str, Any]) -> None:
+    """创建交易订单"""
+    from app.db.models import TradeOrders, Users
+    from sqlalchemy import select
+    import uuid
+
+    listing_id = result.get("listing_id")
+    buyer_id = state.get("user_id")
+    price = result.get("price", 0)
+
+    try:
+        # 查询 listing 获取 seller_id
+        listing_result = await self.db.execute(
+            select(TradeListings).where(TradeListings.public_id == listing_id)
+        )
+        listing = listing_result.scalar_one_or_none()
+
+        if not listing:
+            result["order_created"] = False
+            result["order_error"] = "Listing not found"
+            return
+
+        price_credits = int(price * 100) if price else 0
+        platform_fee = int(price_credits * 0.05)
+        seller_income = price_credits - platform_fee
+
+        order = TradeOrders(
+            public_id=str(uuid.uuid4())[:32],
+            listing_id=listing_id,
+            buyer_user_id=buyer_id,
+            seller_user_id=listing.seller_user_id,
+            asset_title_snapshot=listing.title or "",
+            seller_alias_snapshot=listing.seller_alias or "",
+            price_credits=price_credits,
+            platform_fee=platform_fee,
+            seller_income=seller_income,
+            status="pending",
+        )
+        self.db.add(order)
+        await self.db.commit()
+
+        result["order_created"] = True
+        result["order_id"] = order.public_id
+        result["status"] = "order_created"
+        result["message"] = f"订单已创建: {order.public_id}"
+
+    except Exception as e:
+        logger.error(f"Order creation failed: {e}")
+        result["order_created"] = False
+        result["order_error"] = str(e)
+
+
+async def _create_listing(self, state, result: Dict[str, Any]) -> None:
+    """创建资产上架"""
+    from app.db.models import TradeListings, Users
+    from sqlalchemy import select
+    import uuid
+
+    asset_id = result.get("asset_id")
+    seller_id = state.get("user_id")
+    price = result.get("price", 0)
+
+    try:
+        # 获取 seller alias
+        seller_alias = ""
+        if seller_id:
+            user_result = await self.db.execute(
+                select(Users).where(Users.id == seller_id)
+            )
+            seller_user = user_result.scalar_one_or_none()
+            if seller_user:
+                seller_alias = seller_user.username or ""
+
+        # 从资产上下文获取标题
+        asset_context = state.get("asset_context")
+        title = ""
+        if asset_context:
+            title = asset_context.get("title", "")
+
+        listing = TradeListings(
+            public_id=str(uuid.uuid4())[:32],
+            asset_id=asset_id,
+            seller_user_id=seller_id,
+            seller_alias=seller_alias,
+            title=title or "Untitled Asset",
+            price_credits=int(price * 100) if price else 0,
+            status="active",
+        )
+        self.db.add(listing)
+        await self.db.commit()
+
+        result["listing_created"] = True
+        result["listing_id"] = listing.public_id
+        result["status"] = "listing_created"
+        result["message"] = f"上架已创建: {listing.public_id}"
+
+    except Exception as e:
+        logger.error(f"Listing creation failed: {e}")
+        result["listing_created"] = False
+        result["listing_error"] = str(e)
 
 
 async def publish_state(self, state: TradeState) -> TradeState:
@@ -569,12 +710,11 @@ async def publish_state(self, state: TradeState) -> TradeState:
                 output_data={
                     "result": state.get("result"),
                     "decisions": state.get("decisions"),
-                    "session_id": state.get("session_id"),
                 },
             )
 
         state["current_step"] = "completed"
-        state["completed_at"] = datetime.utcnow()
+        state["completed_at"] = datetime.now(timezone.utc)
 
         return state
 

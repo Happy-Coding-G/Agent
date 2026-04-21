@@ -4,7 +4,6 @@ import { agentChatStream } from "../api/ptds";
 import { useAuth } from "../store/auth";
 import { useWorkbench } from "../store/workbench";
 import { Tab } from "../types";
-import GraphView from "../views/GraphView";
 
 type ToolResult = {
   tool: string;
@@ -28,11 +27,11 @@ type ChatMessage = {
 };
 
 const SUGGESTIONS = [
-  "查看文件树",
-  "显示知识图谱",
-  "列出所有资产",
-  "生成一份知识资产报告",
-  "列出 Markdown 文档",
+  { text: "查看文件树", icon: "📁" },
+  { text: "显示知识图谱", icon: "🕸️" },
+  { text: "列出所有资产", icon: "💎" },
+  { text: "生成一份知识资产报告", icon: "📊" },
+  { text: "列出 Markdown 文档", icon: "📝" },
 ];
 
 function statusLabel(status: string): string {
@@ -96,9 +95,13 @@ export default function ChatTab({ tab }: { tab: Tab }) {
   });
 
   const [input, setInput] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const [streaming, setStreaming] = useState(false);
-  const [panelMode, setPanelMode] = useState<"chat" | "graph">("chat");
   const [activeStatus, setActiveStatus] = useState<string | null>(null);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const suggestionsRef = useRef<HTMLDivElement>(null);
+
+  const isEmptyState = messages.length <= 1 && messages[0]?.role === "assistant";
 
   useEffect(() => {
     try {
@@ -117,9 +120,28 @@ export default function ChatTab({ tab }: { tab: Tab }) {
   }, [sessionId, sessionStorageKey]);
 
   useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = "auto";
+      inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 200)}px`;
+    }
+  }, [input]);
+
+  useEffect(() => {
     if (!scrollRef.current) return;
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages, activeStatus]);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (suggestionsRef.current && !suggestionsRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    }
+    if (showSuggestions) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [showSuggestions]);
 
   const appendStatus = (status: string) => {
     setActiveStatus(statusLabel(status));
@@ -274,27 +296,11 @@ export default function ChatTab({ tab }: { tab: Tab }) {
         style={{
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
+          justifyContent: "flex-end",
           gap: 8,
           padding: "8px 12px 0",
         }}
       >
-        <div style={{ display: "flex", gap: 6 }}>
-          <button
-            className="btn btn-ghost"
-            onClick={() => setPanelMode("chat")}
-            style={panelMode === "chat" ? { background: "var(--accent-light)", borderColor: "var(--accent)" } : undefined}
-          >
-            Chat
-          </button>
-          <button
-            className="btn btn-ghost"
-            onClick={() => setPanelMode("graph")}
-            style={panelMode === "graph" ? { background: "var(--accent-light)", borderColor: "var(--accent)" } : undefined}
-          >
-            Graph
-          </button>
-        </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button
             className="btn btn-ghost"
@@ -305,15 +311,13 @@ export default function ChatTab({ tab }: { tab: Tab }) {
             新建会话
           </button>
           <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-            {panelMode === "chat" ? "Agent-First Chat" : "Graph mode"}
+            Agent-First Chat
           </div>
         </div>
       </div>
 
-      {panelMode === "chat" ? (
-        <>
-          <div className="chat-messages" ref={scrollRef}>
-            {messages.map((msg, i) => (
+      <div className="chat-messages" ref={scrollRef}>
+        {messages.map((msg, i) => (
               <div
                 key={`${msg.role}-${i}`}
                 className={`chat-message ${msg.role === "status" ? "assistant status" : msg.role}`}
@@ -345,47 +349,85 @@ export default function ChatTab({ tab }: { tab: Tab }) {
             )}
           </div>
 
-          <div style={{ padding: "0 12px" }}>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
-              {SUGGESTIONS.map((s) => (
-                <button
-                  key={s}
-                  className="btn btn-ghost"
-                  style={{ fontSize: 11, padding: "4px 8px" }}
-                  onClick={() => void handleSend(s)}
-                  disabled={streaming}
-                >
-                  {s}
-                </button>
-              ))}
+          {isEmptyState && (
+            <div style={{ padding: "0 16px" }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
+                  gap: 10,
+                  marginBottom: 10,
+                }}
+              >
+                {SUGGESTIONS.map((s) => (
+                  <div
+                    key={s.text}
+                    className="suggestion-card"
+                    onClick={() => void handleSend(s.text)}
+                  >
+                    <div className="suggestion-card-icon">{s.icon}</div>
+                    <div className="suggestion-card-text">{s.text}</div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
-          <div className="chat-input-area">
+          <div className="chat-input-area" style={{ position: "relative" }}>
+            {!isEmptyState && (
+              <div style={{ position: "relative" }} ref={suggestionsRef}>
+                <button
+                  type="button"
+                  className="suggestion-trigger"
+                  onClick={() => setShowSuggestions((v) => !v)}
+                  aria-label="快捷指令"
+                  title="快捷指令"
+                >
+                  +
+                </button>
+                {showSuggestions && (
+                  <div className="suggestion-popover">
+                    {SUGGESTIONS.map((s) => (
+                      <div
+                        key={s.text}
+                        className="suggestion-popover-item"
+                        onClick={() => {
+                          setShowSuggestions(false);
+                          void handleSend(s.text);
+                        }}
+                      >
+                        <span>{s.icon}</span>
+                        <span>{s.text}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <textarea
+              ref={inputRef}
               className="chat-input"
-              placeholder="输入问题，Ctrl+Enter 发送"
+              placeholder={isEmptyState ? "输入问题，Ctrl+Enter 发送" : "输入 / 查看快捷指令，Ctrl+Enter 发送"}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                   e.preventDefault();
                   void handleSend();
+                } else if (e.key === "/" && !input.trim()) {
+                  e.preventDefault();
+                  if (!isEmptyState) setShowSuggestions(true);
+                } else if (e.key === "Escape") {
+                  setShowSuggestions(false);
                 }
               }}
               disabled={streaming}
-              rows={2}
+              rows={1}
             />
             <button className="chat-send-btn" onClick={() => void handleSend()} disabled={streaming || !input.trim()}>
               {streaming ? "..." : "Send"}
             </button>
           </div>
-        </>
-      ) : (
-        <div style={{ minHeight: 0, flex: 1, overflow: "auto", padding: "0 12px 12px" }}>
-          <GraphView mode="display" canvasHeight={460} />
-        </div>
-      )}
     </div>
   );
 }

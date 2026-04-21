@@ -1,8 +1,13 @@
-"""
-Agents Module - Multi-agent orchestration system for Agent Data Space Platform
+"""Agents Module - Multi-agent orchestration system for Agent Data Space Platform
 
-This module implements the MainAgent orchestrator and sub-agents using LangGraph.
-It provides intent detection, task delegation, and result aggregation.
+Architecture (Agent != Skill != Tool):
+- MainAgent: Orchestrator (routing + aggregation)
+- AgentSession: Independent agent execution context (own LLM, tools, memory)
+- AgentRegistry: Agent definition discovery + execution dispatch
+- AgentToolRegistry: Atomic operation tools
+
+Legacy compatibility:
+- SubAgents class is retained but deprecated; use AgentRegistry instead
 """
 
 from app.agents.core import MainAgent, SubAgents
@@ -10,7 +15,6 @@ from app.agents.core import (
     AgentType,
     TaskStatus,
     MainAgentState,
-    FileQueryState,
     ReviewState,
     QAState,
     AssetOrganizeState,
@@ -18,16 +22,38 @@ from app.agents.core import (
 )
 from app.agents.tools import AgentToolRegistry
 
+# New agent architecture exports
+from app.agents.agents import (
+    AgentDefinition,
+    AgentRequest,
+    AgentResult,
+    AgentSession,
+    AgentRegistry,
+    AgentMessageBus,
+    SidechainLogger,
+    CircuitBreaker,
+)
+
 __all__ = [
+    # Core
     "MainAgent",
-    "SubAgents",
+    "SubAgents",  # deprecated, kept for compatibility
     "AgentToolRegistry",
+    # State types
     "MainAgentState",
     "TaskStatus",
     "AgentType",
-    "FileQueryState",
     "ReviewState",
     "QAState",
     "AssetOrganizeState",
     "TradeState",
+    # New agent architecture
+    "AgentDefinition",
+    "AgentRequest",
+    "AgentResult",
+    "AgentSession",
+    "AgentRegistry",
+    "AgentMessageBus",
+    "SidechainLogger",
+    "CircuitBreaker",
 ]

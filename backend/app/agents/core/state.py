@@ -65,14 +65,6 @@ class SubAgentInput(TypedDict, total=False):
     extra: Optional[Dict[str, Any]]
 
 
-class FileQueryState(TypedDict):
-    query: str
-    interpreted_path: Optional[str]
-    interpreted_pattern: Optional[str]
-    file_results: List[Dict[str, Any]]
-    error: Optional[str]
-
-
 class ReviewState(TypedDict):
     doc_id: str
     review_type: str
@@ -120,10 +112,10 @@ class AssetOrganizeState(TypedDict):
 
 
 class TradeState(TypedDict):
-    """Enhanced TradeState for hybrid market negotiation architecture."""
+    """TradeState for direct trade mode."""
 
-    # Basic fields (backward compatible)
-    action: str  # "listing", "purchase", "yield", "negotiate"
+    # Basic fields
+    action: str  # "listing", "purchase"
     asset_to_list: Optional[Dict]
     policy: Optional[Dict]
     listing: Optional[Dict]
@@ -131,25 +123,8 @@ class TradeState(TypedDict):
     order: Optional[Dict]
     delivery: Optional[Dict]
 
-    # Market mechanism fields
-    mechanism_type: Optional[
-        str
-    ]  # "contract_net", "auction", "bilateral", "fixed_price"
-    negotiation_id: Optional[str]  # Unique negotiation session ID
-
-    # Shared state board (共享状态板)
-    shared_board: Optional[Dict[str, Any]]  # Quotes, conditions, logs, evidence
-
-    # Seller/Buyer specific
-    seller_agent_state: Optional[Dict[str, Any]]
-    buyer_agent_state: Optional[Dict[str, Any]]
-
-    # Negotiation progress
-    negotiation_round: int
-    max_rounds: int
-    negotiation_status: Optional[
-        str
-    ]  # "announcing", "bidding", "awarding", "negotiating", "settled", "cancelled"
+    # Market mechanism fields (direct mode only)
+    mechanism_type: Optional[str]  # "direct"
 
     # Settlement
     settlement_result: Optional[Dict[str, Any]]
@@ -165,10 +140,10 @@ class NegotiationStatus(str, Enum):
     """Status of a negotiation session."""
 
     PENDING = "pending"  # 待开始
-    ANNOUNCING = "announcing"  # 合同网: 发布公告
-    BIDDING = "bidding"  # 合同网/拍卖: 投标/出价
+    ANNOUNCING = "announcing"  # 拍卖: 发布公告
+    BIDDING = "bidding"  # 拍卖: 出价
     EVALUATING = "evaluating"  # 评估 bids
-    AWARDING = "awarding"  # 合同网:  awarding
+    AWARDING = "awarding"  # 拍卖:  awarding
     NEGOTIATING = "negotiating"  # 双边协商: 多轮议价
     FINALIZING = "finalizing"  # 最终确认
     SETTLED = "settled"  # 已成交
@@ -279,7 +254,7 @@ class SharedStateBoard(TypedDict):
     updated_at: str
 
     # Public quotes (visible to all)
-    public_quotes: List[Dict[str, Any]]  # 公开报价（拍卖/合同网）
+    public_quotes: List[Dict[str, Any]]  # 公开报价（拍卖）
 
     # Conditions
     announced_conditions: Dict[str, Any]  # 公告的条件

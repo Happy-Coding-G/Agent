@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 from io import BytesIO
 from functools import lru_cache, wraps
@@ -27,58 +28,40 @@ MINIO_CIRCUIT_CONFIG = CircuitBreakerConfig(
 
 
 def minio_circuit_breaker_decorator(func: Callable[..., T]) -> Callable[..., T]:
-    """MinIO 操作的熔断器装饰器"""
+    """MinIO 操作的熔断器装饰器（返回 async wrapper，需在 async 上下文中 await）"""
     breaker = ServiceCircuitBreaker.get_breaker("minio", MINIO_CIRCUIT_CONFIG)
 
     @wraps(func)
-    def wrapper(*args, **kwargs):
-        import asyncio
+    async def async_wrapper(*args, **kwargs):
+        can_execute, reason = await breaker.can_execute()
+        if not can_execute:
+            raise ServiceError(503, f"MinIO service unavailable: {reason}")
 
-        async def async_wrapper():
-            can_execute, reason = await breaker.can_execute()
-            if not can_execute:
-                raise ServiceError(503, f"MinIO service unavailable: {reason}")
+        import time
+        start_time = time.time()
 
-            import time
-            start_time = time.time()
-
-            try:
-                # 检查是否是异步函数
-                if asyncio.iscoroutinefunction(func):
-                    result = await func(*args, **kwargs)
-                else:
-                    result = func(*args, **kwargs)
-                await breaker.record_success()
-                return result
-            except S3Error as e:
-                latency_ms = (time.time() - start_time) * 1000
-                is_slow = latency_ms > MINIO_CIRCUIT_CONFIG.slow_call_threshold_ms
-                await breaker.record_failure(is_slow=is_slow)
-                logger.error(f"MinIO S3 error: {e}")
-                raise ServiceError(503, f"存储服务错误: {e.message}")
-            except Exception as e:
-                latency_ms = (time.time() - start_time) * 1000
-                is_slow = latency_ms > MINIO_CIRCUIT_CONFIG.slow_call_threshold_ms
-                await breaker.record_failure(is_slow=is_slow)
-                logger.error(f"MinIO error: {e}")
-                raise ServiceError(503, f"存储服务暂时不可用")
-
-        # 如果已经有事件循环，直接运行
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # 在已运行的事件循环中使用 run_coroutine_threadsafe
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, async_wrapper())
-                    return future.result()
+            if asyncio.iscoroutinefunction(func):
+                result = await func(*args, **kwargs)
             else:
-                return loop.run_until_complete(async_wrapper())
-        except RuntimeError:
-            # 没有事件循环，创建新的
-            return asyncio.run(async_wrapper())
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+            await breaker.record_success()
+            return result
+        except S3Error as e:
+            latency_ms = (time.time() - start_time) * 1000
+            is_slow = latency_ms > MINIO_CIRCUIT_CONFIG.slow_call_threshold_ms
+            await breaker.record_failure(is_slow=is_slow)
+            logger.error(f"MinIO S3 error: {e}")
+            raise ServiceError(503, f"存储服务错误: {e.message}")
+        except Exception as e:
+            latency_ms = (time.time() - start_time) * 1000
+            is_slow = latency_ms > MINIO_CIRCUIT_CONFIG.slow_call_threshold_ms
+            await breaker.record_failure(is_slow=is_slow)
+            logger.error(f"MinIO error: {e}")
+            raise ServiceError(503, f"存储服务暂时不可用")
 
-    return wrapper
+    return async_wrapper
 
 
 class MinioService:

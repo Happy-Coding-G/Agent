@@ -42,7 +42,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
 
   bottomLogs: ["PTDS Workbench ready."],
   sidebarWidth: 300,
-  bottomHeight: 220,
+  bottomHeight: 0,
 
   setSpaceId: (spaceId) => set({ spaceId }),
   incrementSpaceRefreshKey: () => set({ spaceRefreshKey: get().spaceRefreshKey + 1 }),

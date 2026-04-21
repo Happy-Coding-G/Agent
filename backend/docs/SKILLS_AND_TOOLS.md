@@ -106,7 +106,7 @@ Tools 通过 `AgentToolRegistry` 统一注册。注册时接收 `(db, user, spac
 - 执行流程：
   1. 标准化意图
   2. 评估市场/风险上下文
-  3. 选择协商机制（fixed_price / auction / bilateral / contract_net）
+  3. 选择协商机制（fixed_price / auction / bilateral / direct）
   4. 创建/推进 `NegotiationSession`
   5. 返回交易结果或协商状态
 

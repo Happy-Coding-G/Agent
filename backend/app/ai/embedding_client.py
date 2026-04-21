@@ -97,12 +97,7 @@ class RemoteEmbeddingClient:
     def embed(self, texts: list[str]) -> dict[str, Any]:
         """
         调用远程 embedding 服务获取向量
-
-        Args:
-            texts: 待向量化的文本列表
-
-        Returns:
-            包含 data 字段的响应，data[0]["embedding"] 为向量列表
+        优先使用 OpenAI 兼容格式 /v1/embeddings，若 404 则降级到 Ollama /api/embeddings
         """
         url = f"{self.base_url}/v1/embeddings"
         payload = {
@@ -112,12 +107,26 @@ class RemoteEmbeddingClient:
 
         with httpx.Client(timeout=self.timeout) as client:
             response = client.post(url, json=payload)
+            if response.status_code == 404:
+                return self._embed_ollama(client, texts)
             response.raise_for_status()
             return response.json()
+
+    def _embed_ollama(self, client: httpx.Client, texts: list[str]) -> dict[str, Any]:
+        url = f"{self.base_url}/api/embeddings"
+        results: list[dict[str, Any]] = []
+        for text in texts:
+            payload = {"model": self.model, "prompt": text}
+            resp = client.post(url, json=payload)
+            resp.raise_for_status()
+            body = resp.json()
+            results.append({"embedding": body.get("embedding", [])})
+        return {"data": results}
 
     async def aembed(self, texts: list[str]) -> dict[str, Any]:
         """
         异步调用远程 embedding 服务获取向量
+        优先使用 OpenAI 兼容格式 /v1/embeddings，若 404 则降级到 Ollama /api/embeddings
         """
         url = f"{self.base_url}/v1/embeddings"
         payload = {
@@ -127,8 +136,21 @@ class RemoteEmbeddingClient:
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(url, json=payload)
+            if response.status_code == 404:
+                return await self._aembed_ollama(client, texts)
             response.raise_for_status()
             return response.json()
+
+    async def _aembed_ollama(self, client: httpx.AsyncClient, texts: list[str]) -> dict[str, Any]:
+        url = f"{self.base_url}/api/embeddings"
+        results: list[dict[str, Any]] = []
+        for text in texts:
+            payload = {"model": self.model, "prompt": text}
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()
+            body = resp.json()
+            results.append({"embedding": body.get("embedding", [])})
+        return {"data": results}
 
 
 # ============================================================================

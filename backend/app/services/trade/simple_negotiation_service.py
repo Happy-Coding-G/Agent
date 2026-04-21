@@ -645,7 +645,7 @@ class SimpleNegotiationService:
             success=True,
             session_id=session.negotiation_id,
             status=NegotiationStatus(session.status),
-            mechanism=MechanismType.BILATERAL,
+            mechanism=MechanismType.DIRECT,
             engine=EngineType.SIMPLE,
             seller_id=session.seller_user_id,
             buyer_id=session.buyer_user_id,
@@ -667,7 +667,7 @@ class SimpleNegotiationService:
 
         return SessionState(
             session_id=session.negotiation_id,
-            mechanism=MechanismType.BILATERAL,
+            mechanism=MechanismType.DIRECT,
             engine=EngineType.SIMPLE,
             status=NegotiationStatus(session.status),
             seller_id=session.seller_user_id,
