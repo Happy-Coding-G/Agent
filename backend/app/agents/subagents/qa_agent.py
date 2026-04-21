@@ -698,6 +698,14 @@ class QAAgent(SpaceAwareService):
             raise ServiceError(404, "Space not found")
 
         query_vector, _ = await embed_query_with_fallback(query)
+        # 截断/填充到 1536 维（与数据库存储一致）
+        target_dim = 1536
+        actual_dim = len(query_vector)
+        if actual_dim != target_dim:
+            if actual_dim > target_dim:
+                query_vector = query_vector[:target_dim]
+            else:
+                query_vector = query_vector + [0.0] * (target_dim - actual_dim)
         similarity = (
             1 - DocChunkEmbeddings.embedding.cosine_distance(query_vector)
         ).label("similarity")

@@ -167,7 +167,6 @@ export default function GraphView({
   canvasHeight = 340,
 }: GraphViewProps) {
   const space = useAuth((s) => s.currentSpace);
-  const openTab = useWorkbench((s) => s.openTab);
   const log = useWorkbench((s) => s.log);
 
   const [loading, setLoading] = useState(false);
@@ -235,19 +234,6 @@ export default function GraphView({
     setNodeTags((selectedNode.tags || []).join(", "));
   }, [selectedNode]);
 
-  const onOpenNodeMarkdown = (node: GraphNode) => {
-    if (!space?.public_id) return;
-    openTab({
-      id: `tab-md-doc-${node.doc_id}`,
-      kind: "markdown",
-      title: `MD · ${node.label}`,
-      payload: {
-        docId: node.doc_id,
-        spacePublicId: space.public_id,
-      },
-    });
-  };
-
   const onSaveNode = async () => {
     if (!space?.public_id || !selectedNode) return;
 
@@ -310,34 +296,45 @@ export default function GraphView({
   };
 
   return (
-    <div className="col" style={{ gap: 12, minHeight: 0 }}>
+    <div className="col" style={{ gap: 16, minHeight: 0, padding: "16px" }}>
       {showToolbar && (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 4px" }}>
-          <span style={{ fontSize: 11, textTransform: "uppercase", color: "var(--text-muted)", letterSpacing: "0.5px", fontWeight: 600 }}>
-            Knowledge Graph
-          </span>
-          <button className="btn btn-ghost" onClick={() => void loadGraph()} disabled={loading}>
-            {loading ? "Loading..." : "Refresh"}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingBottom: "12px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+          <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 600, color: "#E2E8F0", display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: "16px" }}>🕸️</span> 知识图谱
+          </h3>
+          <button 
+            style={{ padding: "4px 8px", fontSize: 12, background: "transparent", color: "#94A3B8", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, cursor: "pointer", transition: "all 0.2s" }} 
+            onClick={() => void loadGraph()} 
+            disabled={loading}
+            onMouseEnter={(e) => Object.assign(e.currentTarget.style, { background: "rgba(255,255,255,0.05)", color: "#E2E8F0" })}
+            onMouseLeave={(e) => Object.assign(e.currentTarget.style, { background: "transparent", color: "#94A3B8" })}
+          >
+            {loading ? "↻" : "⟳ 刷新"}
           </button>
         </div>
       )}
 
-      {!space && <div style={{ color: "var(--text-muted)", fontSize: 12 }}>Select a space first.</div>}
+      {!space && (
+        <div style={{ padding: "40px 20px", textAlign: "center", background: "rgba(255,255,255,0.02)", borderRadius: 12, border: "1px dashed rgba(255,255,255,0.05)" }}>
+          <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.5 }}>🌐</div>
+          <div style={{ color: "#94A3B8", fontSize: 13 }}>请先选择一个 Space</div>
+        </div>
+      )}
 
       {space && (
         <>
           {showDisplay && (
-            <div className="card" style={{ padding: 10 }}>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
-              <span>Graph View</span>
-              <span>{nodes.length} nodes / {edges.length} edges</span>
-            </div>
-
-            {nodes.length === 0 ? (
-              <div style={{ color: "var(--text-muted)", fontSize: 12, padding: "16px 6px" }}>
-                No graph data yet.
+            <div style={{ padding: "16px", background: "rgba(255,255,255,0.03)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#E2E8F0", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span>📈</span> 图谱预览</span>
+                <span style={{ color: "#94A3B8", fontSize: 12, fontWeight: 400 }}>{nodes.length} 节点 / {edges.length} 边</span>
               </div>
-            ) : (
+
+              {nodes.length === 0 ? (
+                <div style={{ padding: "30px 20px", textAlign: "center", background: "rgba(0,0,0,0.2)", borderRadius: 8, border: "1px dashed rgba(255,255,255,0.05)" }}>
+                  <div style={{ color: "#64748B", fontSize: 13 }}>图谱暂无数据</div>
+                </div>
+              ) : (
               <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", background: "#151515" }}>
                 <svg
                   viewBox={`0 0 ${GRAPH_WIDTH} ${GRAPH_HEIGHT}`}
@@ -454,7 +451,6 @@ export default function GraphView({
                         key={node.doc_id}
                         transform={`translate(${node.x}, ${node.y})`}
                         onClick={() => setSelectedDocId(node.doc_id)}
-                        onDoubleClick={() => onOpenNodeMarkdown(node)}
                         style={{ cursor: "pointer" }}
                       >
                         <circle
@@ -492,23 +488,25 @@ export default function GraphView({
               </div>
             )}
 
-            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 8 }}>
-              {mode === "display"
-                ? "Click node to focus. Double click node to open markdown. Use sidebar KG editor for edits."
-                : "Click node: select and edit. Double click node: open markdown."}
+              <div style={{ fontSize: 11, color: "#64748B", marginTop: 12, textAlign: "center" }}>
+                {mode === "display"
+                  ? "点击节点进行聚焦，使用左侧栏图谱编辑器修改"
+                  : "点击节点进行选择和编辑"}
+              </div>
             </div>
-          </div>
           )}
 
           {showEditor && mode === "editor" && (
-            <div className="card" style={{ padding: 10 }}>
-              <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Node Selector</div>
+            <div style={{ padding: "16px", background: "rgba(255,255,255,0.03)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#E2E8F0", display: "flex", alignItems: "center", gap: 6 }}>
+                <span>🎯</span> 节点选择器
+              </div>
               <select
-                className="input"
                 value={selectedDocId}
                 onChange={(e) => setSelectedDocId(e.target.value)}
+                style={{ padding: "8px 12px", fontSize: 13, background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#E2E8F0", outline: "none", width: "100%" }}
               >
-                <option value="">Select node</option>
+                <option value="">选择一个节点...</option>
                 {nodes.map((node) => (
                   <option key={`node-${node.doc_id}`} value={node.doc_id}>
                     {node.label || node.doc_id}
@@ -519,75 +517,121 @@ export default function GraphView({
           )}
 
           {showEditor && (
-            <div className="card" style={{ padding: 10 }}>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Selected Node</div>
-            {selectedNode ? (
-              <div className="col" style={{ gap: 8 }}>
-                <input className="input" value={nodeLabel} onChange={(e) => setNodeLabel(e.target.value)} placeholder="Label" />
-                <textarea
-                  className="input"
-                  value={nodeDescription}
-                  onChange={(e) => setNodeDescription(e.target.value)}
-                  placeholder="Description"
-                  style={{ minHeight: 80, resize: "vertical" }}
+            <div style={{ padding: "16px", background: "rgba(255,255,255,0.03)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#E2E8F0", display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <span>📝</span> 编辑选中节点
+              </div>
+              {selectedNode ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <input 
+                    value={nodeLabel} 
+                    onChange={(e) => setNodeLabel(e.target.value)} 
+                    placeholder="标签 (Label)" 
+                    style={{ padding: "8px 12px", fontSize: 13, background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#E2E8F0", outline: "none" }}
+                  />
+                  <textarea
+                    value={nodeDescription}
+                    onChange={(e) => setNodeDescription(e.target.value)}
+                    placeholder="描述 (Description)"
+                    style={{ minHeight: 80, resize: "vertical", padding: "10px 12px", fontSize: 13, background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#E2E8F0", outline: "none", lineHeight: 1.5 }}
+                  />
+                  <input 
+                    value={nodeTags} 
+                    onChange={(e) => setNodeTags(e.target.value)} 
+                    placeholder="标签，逗号分隔 (Tags)" 
+                    style={{ padding: "8px 12px", fontSize: 13, background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#E2E8F0", outline: "none" }}
+                  />
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+                    <button 
+                      style={{ padding: "8px 16px", fontSize: 13, background: "#3B82F6", color: "white", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 500 }} 
+                      onClick={() => void onSaveNode()}
+                    >
+                      保存节点
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ color: "#64748B", fontSize: 13, textAlign: "center", padding: "16px 0", background: "rgba(0,0,0,0.2)", borderRadius: 8, border: "1px dashed rgba(255,255,255,0.05)" }}>
+                  {mode === "editor" ? "请先从选择器中选中一个节点。" : "请先在上方图谱中点击一个节点。"}
+                </div>
+              )}
+            </div>
+          )}
+
+          {showEditor && (
+            <div style={{ padding: "16px", background: "rgba(255,255,255,0.03)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#E2E8F0", display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <span>🔗</span> 创建关联边
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <select 
+                  value={edgeSource} 
+                  onChange={(e) => setEdgeSource(e.target.value)} 
+                  style={{ padding: "8px 12px", fontSize: 13, background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#E2E8F0", outline: "none", width: "100%" }}
+                >
+                  <option value="">起始节点...</option>
+                  {nodes.map((n) => (
+                    <option key={`src-${n.doc_id}`} value={n.doc_id}>{n.label}</option>
+                  ))}
+                </select>
+                <select 
+                  value={edgeTarget} 
+                  onChange={(e) => setEdgeTarget(e.target.value)} 
+                  style={{ padding: "8px 12px", fontSize: 13, background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#E2E8F0", outline: "none", width: "100%" }}
+                >
+                  <option value="">目标节点...</option>
+                  {nodes.map((n) => (
+                    <option key={`tgt-${n.doc_id}`} value={n.doc_id}>{n.label}</option>
+                  ))}
+                </select>
+                <input 
+                  value={edgeType} 
+                  onChange={(e) => setEdgeType(e.target.value)} 
+                  placeholder="关联类型" 
+                  style={{ padding: "8px 12px", fontSize: 13, background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#E2E8F0", outline: "none", boxSizing: "border-box" }}
                 />
-                <input className="input" value={nodeTags} onChange={(e) => setNodeTags(e.target.value)} placeholder="Tags (comma separated)" />
-                <div className="row" style={{ justifyContent: "space-between", gap: 8 }}>
-                  <button className="btn btn-primary" onClick={() => void onSaveNode()}>Save Node</button>
-                  <button className="btn btn-ghost" onClick={() => onOpenNodeMarkdown(selectedNode)}>Open MD</button>
+                <input 
+                  value={edgeDesc} 
+                  onChange={(e) => setEdgeDesc(e.target.value)} 
+                  placeholder="关联描述" 
+                  style={{ padding: "8px 12px", fontSize: 13, background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#E2E8F0", outline: "none", boxSizing: "border-box" }}
+                />
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+                  <button 
+                    style={{ padding: "8px 16px", fontSize: 13, background: "transparent", color: "#10B981", border: "1px solid rgba(16,185,129,0.3)", borderRadius: 6, cursor: "pointer", transition: "all 0.2s" }} 
+                    onClick={() => void onCreateEdge()}
+                    onMouseEnter={(e) => Object.assign(e.currentTarget.style, { background: "rgba(16,185,129,0.1)" })}
+                    onMouseLeave={(e) => Object.assign(e.currentTarget.style, { background: "transparent" })}
+                  >
+                    + 添加边
+                  </button>
                 </div>
               </div>
-            ) : (
-              <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
-                {mode === "editor" ? "Select a node from the selector." : "Select a node from graph view."}
+            </div>
+          )}
+
+          {showEditor && (
+            <div style={{ padding: "16px", background: "rgba(255,255,255,0.03)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", minHeight: 0, display: "flex", flexDirection: "column" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#E2E8F0", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                <span>🧬</span> 边列表 ({edges.length})
               </div>
-            )}
-          </div>
-          )}
-
-          {showEditor && (
-            <div className="card" style={{ padding: 10 }}>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Create Relation</div>
-            <div className="col" style={{ gap: 8 }}>
-              <select className="input" value={edgeSource} onChange={(e) => setEdgeSource(e.target.value)}>
-                <option value="">Source node</option>
-                {nodes.map((n) => (
-                  <option key={`src-${n.doc_id}`} value={n.doc_id}>{n.label}</option>
-                ))}
-              </select>
-              <select className="input" value={edgeTarget} onChange={(e) => setEdgeTarget(e.target.value)}>
-                <option value="">Target node</option>
-                {nodes.map((n) => (
-                  <option key={`tgt-${n.doc_id}`} value={n.doc_id}>{n.label}</option>
-                ))}
-              </select>
-              <input className="input" value={edgeType} onChange={(e) => setEdgeType(e.target.value)} placeholder="Relation type" />
-              <input className="input" value={edgeDesc} onChange={(e) => setEdgeDesc(e.target.value)} placeholder="Description" />
-              <button className="btn btn-primary" onClick={() => void onCreateEdge()}>Add Edge</button>
+              <div style={{ maxHeight: 350, overflow: "auto", display: "grid", gap: 10, paddingRight: 4 }}>
+                {edges.map((edge) => {
+                  const source = nodes.find((n) => n.doc_id === edge.source_doc_id)?.label || edge.source_doc_id;
+                  const target = nodes.find((n) => n.doc_id === edge.target_doc_id)?.label || edge.target_doc_id;
+                  return (
+                    <EdgeEditor
+                      key={edge.edge_id}
+                      edge={edge}
+                      sourceLabel={source}
+                      targetLabel={target}
+                      onSave={(next) => void onUpdateEdge(next)}
+                      onDelete={() => void onDeleteEdge(edge.edge_id)}
+                    />
+                  );
+                })}
+              </div>
             </div>
-          </div>
-          )}
-
-          {showEditor && (
-            <div className="card" style={{ padding: 10 }}>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Edges ({edges.length})</div>
-            <div style={{ maxHeight: 230, overflow: "auto", display: "grid", gap: 8 }}>
-              {edges.map((edge) => {
-                const source = nodes.find((n) => n.doc_id === edge.source_doc_id)?.label || edge.source_doc_id;
-                const target = nodes.find((n) => n.doc_id === edge.target_doc_id)?.label || edge.target_doc_id;
-                return (
-                  <EdgeEditor
-                    key={edge.edge_id}
-                    edge={edge}
-                    sourceLabel={source}
-                    targetLabel={target}
-                    onSave={(next) => void onUpdateEdge(next)}
-                    onDelete={() => void onDeleteEdge(edge.edge_id)}
-                  />
-                );
-              })}
-            </div>
-          </div>
           )}
         </>
       )}
@@ -617,16 +661,42 @@ function EdgeEditor({
   }, [edge.relation_type, edge.description]);
 
   return (
-    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 8, background: "var(--panel-2)" }}>
-      <div style={{ fontSize: 12, marginBottom: 6 }}>
-        {sourceLabel} -&gt; {targetLabel}
+    <div style={{ border: "1px solid rgba(255,255,255,0.05)", borderRadius: 8, padding: "12px", background: "rgba(255,255,255,0.02)" }}>
+      <div style={{ fontSize: 13, fontWeight: 500, color: "#E2E8F0", marginBottom: 10 }}>
+        {shorten(sourceLabel, 18)} <span style={{ color: "#64748B", margin: "0 6px" }}>→</span> {shorten(targetLabel, 18)}
       </div>
-      <div className="row" style={{ gap: 6 }}>
-        <input className="input" style={{ flex: 1 }} value={relationType} onChange={(e) => setRelationType(e.target.value)} />
-        <button className="btn btn-ghost" onClick={() => onSave({ ...edge, relation_type: relationType, description })}>Save</button>
-        <button className="btn btn-ghost" onClick={onDelete}>Delete</button>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <input 
+          style={{ flex: "1 1 120px", padding: "6px 10px", fontSize: 13, background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#E2E8F0", outline: "none", boxSizing: "border-box" }} 
+          value={relationType} 
+          onChange={(e) => setRelationType(e.target.value)} 
+          placeholder="关系类型"
+        />
+        <input 
+          style={{ flex: "2 1 200px", padding: "6px 10px", fontSize: 13, background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#E2E8F0", outline: "none", boxSizing: "border-box" }} 
+          value={description} 
+          onChange={(e) => setDescription(e.target.value)} 
+          placeholder="描述" 
+        />
       </div>
-      <input className="input" style={{ marginTop: 6 }} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Edge description" />
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
+        <button 
+          style={{ padding: "4px 10px", fontSize: 12, background: "transparent", color: "#EF4444", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 4, cursor: "pointer", transition: "all 0.2s" }} 
+          onClick={onDelete}
+          onMouseEnter={(e) => Object.assign(e.currentTarget.style, { background: "rgba(239,68,68,0.1)" })}
+          onMouseLeave={(e) => Object.assign(e.currentTarget.style, { background: "transparent" })}
+        >
+          删除
+        </button>
+        <button 
+          style={{ padding: "4px 10px", fontSize: 12, background: "transparent", color: "#3B82F6", border: "1px solid rgba(59,130,246,0.3)", borderRadius: 4, cursor: "pointer", transition: "all 0.2s" }} 
+          onClick={() => onSave({ ...edge, relation_type: relationType, description })}
+          onMouseEnter={(e) => Object.assign(e.currentTarget.style, { background: "rgba(59,130,246,0.1)" })}
+          onMouseLeave={(e) => Object.assign(e.currentTarget.style, { background: "transparent" })}
+        >
+          保存修改
+        </button>
+      </div>
     </div>
   );
 }

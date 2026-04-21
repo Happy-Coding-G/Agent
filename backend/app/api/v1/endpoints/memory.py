@@ -189,7 +189,7 @@ async def add_message(
     current_user: Users = Depends(get_current_user),
 ) -> dict[str, Any]:
     """添加消息到会话"""
-    memory = UnifiedMemoryService(db)
+    memory = UnifiedMemoryService(db, user_id=current_user.id)
 
     # 验证会话归属
     session = await memory.episodic.get_session(session_id, user_id=current_user.id)

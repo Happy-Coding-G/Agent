@@ -131,7 +131,7 @@ class SpaceFileService(SpaceAwareService):
                 expected_object_key=object_key,
             )
 
-        presigned_url = minio_service.get_upload_url(object_key)
+        presigned_url = await minio_service.get_upload_url(object_key)
         return {
             "upload_id": upload_id,
             "upload_url": presigned_url,

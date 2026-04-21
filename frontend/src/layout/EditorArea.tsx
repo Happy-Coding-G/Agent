@@ -1,4 +1,3 @@
-import TabBar from "../shared/TabBar";
 import { useWorkbench } from "../store/workbench";
 import ChatTab from "../worktabs/ChatTab";
 import MarkdownTab from "../worktabs/MarkdownTab";
@@ -14,9 +13,8 @@ export default function EditorArea() {
 
   return (
     <>
-      <TabBar />
       <div className="editor">
-        <div className="editor-pane">
+        <div key={active.id} className="editor-pane fade-in-tab">
           {active.kind === "chat" && <ChatTab tab={active} />}
           {active.kind === "markdown" && <MarkdownTab tab={active} />}
           {active.kind === "kg" && <GraphTab tab={active} />}

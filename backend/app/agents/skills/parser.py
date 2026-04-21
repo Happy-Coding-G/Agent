@@ -14,13 +14,22 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-SKILLS_DOCS_DIR = Path(__file__).with_name("docs")
+# Default directories: skills/docs (tools/skills) + subagents/docs (subagent definitions)
+_SKILLS_DIR = Path(__file__).with_name("docs")
+_SUBAGENTS_DIR = Path(__file__).resolve().parent.parent / "subagents" / "docs"
+SKILLS_DOCS_DIRS = [_SKILLS_DIR, _SUBAGENTS_DIR]
 
 
 @dataclass
 class SkillMDDocument:
-    """Parsed SKILL.md document."""
+    """Parsed SKILL.md document — Claude Code style agent definition.
 
+    Supports both legacy skill metadata and Claude Code style agent frontmatter:
+    - name / description / model / color / tools / examples
+    - system_prompt (Markdown body as agent system prompt)
+    """
+
+    # Legacy / core fields
     skill_id: str
     name: str
     capability_type: str  # skill | subagent | tool | prompt
@@ -33,9 +42,56 @@ class SkillMDDocument:
     raw_markdown: str
     frontmatter: Dict[str, Any]
 
-    def to_capability_schema(self) -> Dict[str, Any]:
-        """Convert to schema format expected by MainAgent LLM prompts."""
-        return {
+    # Claude Code style fields
+    model: Optional[str] = None
+    color: Optional[str] = None
+    tools: List[str] = None
+    skills: List[str] = None  # 引用的 Skill 名称列表
+    examples: List[Dict[str, str]] = None
+    system_prompt: str = ""
+
+    # Agent-specific fields (new in agent architecture)
+    temperature: float = 0.2
+    max_rounds: int = 10
+    permission_mode: str = "plan"
+    memory: Dict[str, Any] = None
+
+    def __post_init__(self):
+        if self.tools is None:
+            self.tools = []
+        if self.skills is None:
+            self.skills = []
+        if self.examples is None:
+            self.examples = []
+        if self.memory is None:
+            self.memory = {}
+
+    def to_l1_schema(self) -> Dict[str, Any]:
+        """Convert to L1 lightweight schema (metadata only, ~30 words).
+
+        Used for capability routing decisions in MainAgent _plan_step.
+        """
+        schema: Dict[str, Any] = {
+            "name": self.skill_id,
+            "display_name": self.name,
+            "capability_type": self.capability_type,
+            "description": self.description,
+        }
+        if self.tools:
+            schema["tools"] = self.tools
+        return schema
+
+    def to_capability_schema(self, level: str = "l2") -> Dict[str, Any]:
+        """Convert to schema format expected by MainAgent LLM prompts.
+
+        Args:
+            level: "l1" for lightweight metadata-only schema,
+                   "l2" for full schema with workflow_steps, examples, etc.
+        """
+        if level == "l1":
+            return self.to_l1_schema()
+
+        schema: Dict[str, Any] = {
             "name": self.skill_id,
             "display_name": self.name,
             "capability_type": self.capability_type,
@@ -45,48 +101,89 @@ class SkillMDDocument:
             "output_summary": self.output_summary,
             "parameters": self.input_schema,
         }
+        if self.model:
+            schema["model"] = self.model
+        if self.color:
+            schema["color"] = self.color
+        if self.tools:
+            schema["tools"] = self.tools
+        if self.examples:
+            schema["examples"] = self.examples
+        # Agent-specific fields
+        schema["temperature"] = self.temperature
+        schema["max_rounds"] = self.max_rounds
+        schema["permission_mode"] = self.permission_mode
+        if self.memory:
+            schema["memory"] = self.memory
+        return schema
 
 
 class SkillMDParser:
     """Parser for SKILL.md workflow documents."""
 
-    def __init__(self, docs_dir: Optional[Path] = None):
-        self.docs_dir = docs_dir or SKILLS_DOCS_DIR
+    def __init__(self, docs_dirs: Optional[List[Path]] = None):
+        self.docs_dirs = docs_dirs or SKILLS_DOCS_DIRS
         self._documents: Dict[str, SkillMDDocument] = {}
         self._loaded = False
 
-    def _load_all(self) -> None:
+    def _load_all(self, metadata_only: bool = False) -> None:
         if self._loaded:
             return
-        if not self.docs_dir.exists():
-            logger.warning(f"SKILL.md docs directory not found: {self.docs_dir}")
-            self._loaded = True
+        if metadata_only and getattr(self, "_metadata_loaded", False):
             return
 
-        for md_path in sorted(self.docs_dir.glob("*.md")):
-            try:
-                doc = self._parse_file(md_path)
-                self._documents[doc.skill_id] = doc
-            except Exception as e:
-                logger.warning(f"Failed to parse SKILL.md {md_path}: {e}")
+        total_loaded = 0
+        for docs_dir in self.docs_dirs:
+            if not docs_dir.exists():
+                logger.debug(f"SKILL.md docs directory not found: {docs_dir}")
+                continue
 
-        self._loaded = True
-        logger.info(f"Loaded {len(self._documents)} SKILL.md documents from {self.docs_dir}")
+            for md_path in sorted(docs_dir.glob("*.md")):
+                try:
+                    doc = self._parse_file(md_path, metadata_only=metadata_only)
+                    # Subagent docs take precedence over skill docs with same skill_id
+                    self._documents[doc.skill_id] = doc
+                    total_loaded += 1
+                except Exception as e:
+                    logger.warning(f"Failed to parse SKILL.md {md_path}: {e}")
 
-    def _parse_file(self, path: Path) -> SkillMDDocument:
-        raw = path.read_text(encoding="utf-8")
-
-        # Split YAML frontmatter
-        if raw.startswith("---"):
-            _, frontmatter_text, body = raw.split("---", 2)
+        if metadata_only:
+            self._metadata_loaded = True
         else:
+            self._loaded = True
+        logger.info(
+            f"Loaded {len(self._documents)} SKILL.md documents "
+            f"({total_loaded} parsed, metadata_only={metadata_only}) "
+            f"from {len(self.docs_dirs)} directories"
+        )
+
+    def _parse_file(self, path: Path, metadata_only: bool = False) -> SkillMDDocument:
+        if metadata_only:
+            # Stream-read only frontmatter to avoid loading large bodies
             frontmatter_text = ""
-            body = raw
+            body = ""
+            with path.open("r", encoding="utf-8") as f:
+                first_line = f.readline()
+                if first_line.strip() == "---":
+                    lines = []
+                    for line in f:
+                        if line.strip() == "---":
+                            break
+                        lines.append(line)
+                    frontmatter_text = "".join(lines)
+        else:
+            raw = path.read_text(encoding="utf-8")
+            # Split YAML frontmatter
+            if raw.startswith("---"):
+                _, frontmatter_text, body = raw.split("---", 2)
+            else:
+                frontmatter_text = ""
+                body = raw
 
         frontmatter = yaml.safe_load(frontmatter_text.strip() or "{}") or {}
-        body = body.strip()
+        body = body.strip() if not metadata_only else ""
 
-        skill_id = frontmatter.get("skill_id") or path.stem
+        skill_id = frontmatter.get("skill_id") or frontmatter.get("name") or path.stem
         name = frontmatter.get("name") or skill_id
         capability_type = frontmatter.get("capability_type", "skill")
         description = frontmatter.get("description", "")
@@ -94,9 +191,32 @@ class SkillMDParser:
         input_schema = frontmatter.get("input_schema", {"type": "object", "properties": {}})
         output_summary = frontmatter.get("output_summary", "")
 
-        # Extract structured sections from markdown body
-        workflow_steps = self._extract_list_section(body, "工作流步骤", "workflow steps")
-        suitable_scenarios = self._extract_list_section(body, "适用场景", "suitable scenarios")
+        # Claude Code style fields
+        model = frontmatter.get("model")
+        color = frontmatter.get("color")
+        tools = frontmatter.get("tools", [])
+        skills = frontmatter.get("skills", [])
+        examples = frontmatter.get("examples", [])
+
+        # Agent-specific fields (new in agent architecture)
+        temperature = frontmatter.get("temperature", 0.2)
+        max_rounds = frontmatter.get("max_rounds", 10)
+        permission_mode = frontmatter.get("permission_mode", "plan")
+        memory = frontmatter.get("memory", {})
+
+        if metadata_only:
+            # Skip body extraction when loading metadata only
+            workflow_steps: List[str] = []
+            suitable_scenarios: List[str] = []
+            system_prompt = ""
+            raw_markdown = ""
+        else:
+            # Extract structured sections from markdown body
+            workflow_steps = self._extract_list_section(body, "工作流步骤", "workflow steps", "编排流程")
+            suitable_scenarios = self._extract_list_section(body, "适用场景", "suitable scenarios", "适用场景")
+            # Use the full markdown body as system_prompt (Claude Code style)
+            system_prompt = body
+            raw_markdown = body
 
         return SkillMDDocument(
             skill_id=skill_id,
@@ -108,8 +228,18 @@ class SkillMDParser:
             output_summary=output_summary,
             suitable_scenarios=suitable_scenarios,
             workflow_steps=workflow_steps,
-            raw_markdown=body,
+            raw_markdown=raw_markdown,
             frontmatter=frontmatter,
+            model=model,
+            color=color,
+            tools=tools,
+            skills=skills,
+            examples=examples,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_rounds=max_rounds,
+            permission_mode=permission_mode,
+            memory=memory,
         )
 
     def _extract_list_section(
@@ -158,6 +288,35 @@ class SkillMDParser:
             docs = [d for d in docs if d.capability_type == capability_type]
         return docs
 
-    def get_schemas(self, capability_type: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Return capability schemas for LLM prompt injection."""
-        return [doc.to_capability_schema() for doc in self.list_documents(capability_type)]
+    def list_metadata(
+        self, capability_type: Optional[str] = None
+    ) -> List[SkillMDDocument]:
+        """Return documents with only frontmatter parsed (no body sections).
+
+        Used for L1 lightweight schema generation.
+        """
+        self._load_all(metadata_only=True)
+        docs = list(self._documents.values())
+        if capability_type:
+            docs = [d for d in docs if d.capability_type == capability_type]
+        return docs
+
+    def get_schemas(
+        self, capability_type: Optional[str] = None, level: str = "l2"
+    ) -> List[Dict[str, Any]]:
+        """Return capability schemas for LLM prompt injection.
+
+        Args:
+            capability_type: Filter by capability type (skill/agent/tool).
+            level: "l1" for lightweight metadata-only schemas,
+                   "l2" for full schemas with workflow steps, examples, etc.
+        """
+        if level == "l1":
+            return [
+                doc.to_capability_schema(level="l1")
+                for doc in self.list_metadata(capability_type)
+            ]
+        return [
+            doc.to_capability_schema(level="l2")
+            for doc in self.list_documents(capability_type)
+        ]

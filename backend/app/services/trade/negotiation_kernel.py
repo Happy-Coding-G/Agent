@@ -100,14 +100,14 @@ class NegotiationKernel:
         )
 
         # 参数验证
-        if mechanism == MechanismType.BILATERAL and not buyer_id:
+        if mechanism == MechanismType.DIRECT and not buyer_id:
             return create_error_result(
                 "buyer_id is required for bilateral negotiation"
             )
 
         try:
             # 路由到对应引擎
-            if engine == EngineType.SIMPLE or mechanism == MechanismType.BILATERAL:
+            if engine == EngineType.SIMPLE or mechanism == MechanismType.DIRECT:
                 return await self._bilateral.create_session(
                     seller_id=seller_id,
                     buyer_id=buyer_id,
@@ -402,7 +402,7 @@ class _BilateralEngine:
             return create_success_result(
                 session_id=result.get("negotiation_id"),
                 message="Bilateral session created",
-                mechanism=MechanismType.BILATERAL,
+                mechanism=MechanismType.DIRECT,
                 engine=EngineType.SIMPLE,
                 seller_id=seller_id,
                 buyer_id=buyer_id,
@@ -454,7 +454,7 @@ class _BilateralEngine:
 
         return SessionState(
             session_id=session_id,
-            mechanism=MechanismType.BILATERAL,
+            mechanism=MechanismType.DIRECT,
             engine=EngineType.SIMPLE,
             status=NegotiationStatus(session.status),
             seller_id=session.seller_user_id,
@@ -554,8 +554,8 @@ class _AuctionEngine:
             return create_success_result(
                 session_id=result.get("session_id"),
                 message="Auction session created",
-                mechanism=MechanismType.AUCTION,
-                engine=EngineType.EVENT_SOURCED,
+                mechanism=MechanismType.DIRECT,
+                engine=EngineType.SIMPLE,
                 seller_id=seller_id,
                 starting_price=starting_price,
                 reserve_price=reserve_price,
@@ -604,10 +604,10 @@ class _AuctionEngine:
 
         return SessionState(
             session_id=session_id,
-            mechanism=MechanismType.AUCTION,
-            engine=EngineType.EVENT_SOURCED,
+            mechanism=MechanismType.DIRECT,
+            engine=EngineType.SIMPLE,
             status=NegotiationStatus(result.get("status", "active")),
-            seller_id=0,  # 需要从数据库查询
+            seller_id=0,
             listing_id=None,
             current_price=result.get("current_highest_bid"),
             current_round=0,  # 拍卖使用不同计数

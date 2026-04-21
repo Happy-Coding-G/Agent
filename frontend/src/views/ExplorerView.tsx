@@ -277,53 +277,55 @@ export default function ExplorerView() {
   }, []);
 
   return (
-    <div className="col" style={{ gap: "12px" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 4px" }}>
-        <span style={{ fontSize: "11px", textTransform: "uppercase", color: "var(--text-muted)", letterSpacing: "0.5px", fontWeight: 600 }}>
-          Folders
+    <div className="col" style={{ gap: "12px", padding: "12px 16px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingBottom: "12px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+        <span style={{ fontSize: "12px", textTransform: "uppercase", color: "#94A3B8", letterSpacing: "1px", fontWeight: 600 }}>
+          文件夹
         </span>
-        <div style={{ display: "flex", gap: "4px" }}>
+        <div style={{ display: "flex", gap: "6px" }}>
           {space && (
-            <button className="folder-action-btn" title="Create root folder" onClick={openCreateRootFolder}>
+            <button className="folder-action-btn" title="Create root folder" onClick={openCreateRootFolder} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 4, border: "none", background: "rgba(255,255,255,0.05)", color: "#E2E8F0", cursor: "pointer", transition: "all 0.2s" }}>
               +
             </button>
           )}
-          <button className="folder-action-btn" onClick={() => void loadTree()} title="Refresh">R</button>
-          <button className="folder-action-btn" onClick={() => setExpandedIds(new Set())} title="Collapse all">C</button>
+          <button className="folder-action-btn" onClick={() => void loadTree()} title="Refresh" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 4, border: "none", background: "rgba(255,255,255,0.05)", color: "#E2E8F0", cursor: "pointer", transition: "all 0.2s" }}>⟳</button>
+          <button className="folder-action-btn" onClick={() => setExpandedIds(new Set())} title="Collapse all" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 4, border: "none", background: "rgba(255,255,255,0.05)", color: "#E2E8F0", cursor: "pointer", transition: "all 0.2s" }}>-</button>
         </div>
       </div>
 
       {showRootFolderInput && space && (
-        <div style={{ padding: "0 4px", display: "grid", gap: 6 }}>
-          <div style={{ display: "flex", gap: 6 }}>
-            <input
-              ref={inputRef}
-              type="text"
-              className="input"
-              placeholder="Root folder name"
-              value={rootFolderName}
-              onChange={(e) => setRootFolderName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void onCreateRootFolder();
-                if (e.key === "Escape") {
-                  cancelCreateRootFolder();
-                }
-              }}
-              style={{ width: "100%", fontSize: 12, padding: "6px 8px" }}
-            />
+        <div style={{ padding: "12px", background: "rgba(255,255,255,0.03)", borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", gap: 10 }}>
+          <input
+            ref={inputRef}
+            type="text"
+            onChange={(e) => setRootFolderName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void onCreateRootFolder();
+              if (e.key === "Escape") {
+                cancelCreateRootFolder();
+              }
+            }}
+            placeholder="新文件夹名称..."
+            style={{ width: "100%", fontSize: 13, padding: "8px 12px", background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, color: "#E2E8F0", outline: "none" }}
+          />
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button
-              className="btn btn-primary"
+              onClick={cancelCreateRootFolder}
+              disabled={creatingRootFolder}
+              style={{ padding: "6px 12px", fontSize: 12, background: "transparent", color: "#94A3B8", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, cursor: "pointer" }}
+            >
+              取消
+            </button>
+            <button
               onClick={() => void onCreateRootFolder()}
               disabled={creatingRootFolder || !rootFolderName.trim()}
+              style={{ padding: "6px 12px", fontSize: 12, background: "#3B82F6", color: "white", border: "none", borderRadius: 4, cursor: "pointer", opacity: creatingRootFolder || !rootFolderName.trim() ? 0.5 : 1 }}
             >
-              {creatingRootFolder ? "Creating..." : "Create"}
-            </button>
-            <button className="btn btn-ghost" onClick={cancelCreateRootFolder} disabled={creatingRootFolder}>
-              Cancel
+              {creatingRootFolder ? "创建中..." : "创建"}
             </button>
           </div>
           {rootFolderError && (
-            <div style={{ color: "var(--danger)", fontSize: 12 }}>
+            <div style={{ color: "#EF4444", fontSize: 12, marginTop: 4 }}>
               {rootFolderError}
             </div>
           )}
@@ -333,14 +335,15 @@ export default function ExplorerView() {
       {loading && <div style={{ color: "var(--text-muted)", padding: "8px" }}>Loading...</div>}
 
       {!loading && tree.length === 0 && (
-        <div className="empty-state" style={{ padding: "40px 20px" }}>
-          <div className="empty-state-title" style={{ fontSize: 15 }}>No folders yet</div>
-          <div className="empty-state-description" style={{ fontSize: 13, marginBottom: 16, color: "var(--text-muted)" }}>
-            {space ? `Space "${space.name}" has no folders` : "Select a space first"}
+        <div className="empty-state" style={{ padding: "60px 20px", textAlign: "center", background: "rgba(255,255,255,0.02)", borderRadius: 12, border: "1px dashed rgba(255,255,255,0.05)" }}>
+          <div style={{ fontSize: 40, opacity: 0.5, marginBottom: 16 }}>📁</div>
+          <div style={{ fontSize: 15, fontWeight: 500, color: "#E2E8F0", marginBottom: 8 }}>暂无文件夹</div>
+          <div style={{ fontSize: 13, marginBottom: 24, color: "#94A3B8" }}>
+            {space ? `空间 "${space.name}" 目前是空的` : "请先选择一个工作空间"}
           </div>
           {space && (
-            <button className="quick-action-btn" onClick={openCreateRootFolder}>
-              Create folder
+            <button onClick={openCreateRootFolder} style={{ padding: "8px 16px", borderRadius: 6, background: "#3B82F6", color: "white", border: "none", cursor: "pointer", fontWeight: 500, transition: "background 0.2s" }}>
+              创建文件夹
             </button>
           )}
         </div>

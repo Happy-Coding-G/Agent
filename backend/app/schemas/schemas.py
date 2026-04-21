@@ -535,26 +535,3 @@ class TradeNegotiationStatus(BaseModel):
     termination_reason: Optional[str] = None
 
 
-class TradeContractNetAnnounceRequest(BaseModel):
-    """合同网任务发布请求"""
-
-    asset_id: str
-    task_description: Dict[str, Any]
-    eligibility_criteria: Optional[Dict[str, Any]] = Field(default=None)
-    deadline_minutes: int = Field(default=60, ge=5)
-
-
-class TradeContractNetResponse(BaseModel):
-    """合同网响应"""
-
-    announcement_id: str
-    phase: str
-    deadline: float
-
-
-class TradeContractNetBidRequest(BaseModel):
-    """合同网投标请求"""
-
-    announcement_id: str
-    bid_amount: float = Field(..., gt=0)
-    qualifications: Optional[Dict[str, Any]] = Field(default=None)

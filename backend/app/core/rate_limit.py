@@ -47,10 +47,11 @@ T = TypeVar("T")
 # ============================================================================
 
 class RedisManager:
-    """Redis连接管理器"""
+    """Redis连接管理器（支持跨 event loop 自动重建连接）"""
 
     _instance: Optional[RedisManager] = None
     _redis: Optional[redis.Redis] = None
+    _loop_id: Optional[int] = None
     _lock = asyncio.Lock()
 
     def __new__(cls):
@@ -59,10 +60,20 @@ class RedisManager:
         return cls._instance
 
     async def get_redis(self) -> redis.Redis:
-        """获取Redis连接"""
-        if self._redis is None:
+        """获取Redis连接，自动检测 event loop 变化并重建"""
+        current_loop = asyncio.get_running_loop()
+        current_loop_id = id(current_loop)
+
+        if self._redis is None or self._loop_id != current_loop_id:
             async with self._lock:
-                if self._redis is None:
+                if self._redis is None or self._loop_id != current_loop_id:
+                    # 关闭旧连接（如果存在）
+                    if self._redis is not None:
+                        try:
+                            await self._redis.close()
+                        except Exception:
+                            pass
+                    # 创建新连接绑定到当前 loop
                     self._redis = redis.from_url(
                         settings.REDIS_URL,
                         encoding="utf-8",
@@ -71,6 +82,7 @@ class RedisManager:
                         socket_keepalive=True,
                         health_check_interval=30,
                     )
+                    self._loop_id = current_loop_id
         return self._redis
 
     async def close(self):
@@ -78,6 +90,7 @@ class RedisManager:
         if self._redis:
             await self._redis.close()
             self._redis = None
+            self._loop_id = None
 
 
 redis_manager = RedisManager()
@@ -121,9 +134,8 @@ class BaseRedisRateLimiter:
         self._redis: Optional[redis.Redis] = None
 
     async def _get_redis(self) -> redis.Redis:
-        if self._redis is None:
-            self._redis = await redis_manager.get_redis()
-        return self._redis
+        # 不缓存连接，每次从 RedisManager 获取（自动处理跨 event loop）
+        return await redis_manager.get_redis()
 
     def _make_key(self, identifier: str) -> str:
         """生成Redis键"""
@@ -500,9 +512,8 @@ class CircuitBreaker:
         self._key_prefix = f"circuit_breaker:{name}"
 
     async def _get_redis(self) -> redis.Redis:
-        if self._redis is None:
-            self._redis = await redis_manager.get_redis()
-        return self._redis
+        # 不缓存连接，每次从 RedisManager 获取（自动处理跨 event loop）
+        return await redis_manager.get_redis()
 
     def _get_state_key(self) -> str:
         return f"{self._key_prefix}:state"
@@ -704,10 +715,10 @@ class UserTier(str, Enum):
 # 各等级默认限流配置
 TIER_RATE_LIMITS: Dict[UserTier, Dict[str, RateLimitConfig]] = {
     UserTier.FREE: {
-        "default": RateLimitConfig(max_requests=30, window_seconds=60),
-        "chat": RateLimitConfig(max_requests=10, window_seconds=60),
-        "upload": RateLimitConfig(max_requests=5, window_seconds=60),
-        "api": RateLimitConfig(max_requests=100, window_seconds=60),
+        "default": RateLimitConfig(max_requests=100, window_seconds=60),
+        "chat": RateLimitConfig(max_requests=30, window_seconds=60),
+        "upload": RateLimitConfig(max_requests=50, window_seconds=60),
+        "api": RateLimitConfig(max_requests=200, window_seconds=60),
     },
     UserTier.PRO: {
         "default": RateLimitConfig(max_requests=120, window_seconds=60),
@@ -1040,6 +1051,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         tier = UserTier.FREE
         if self.enable_tier_based and hasattr(request.state, "user_tier"):
             tier = request.state.user_tier
+        else:
+            # 中间件在 auth 依赖之前执行，通过 Authorization 头判断已登录用户并放宽限制
+            auth_header = request.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                tier = UserTier.INTERNAL
 
         # 检查限流
         allowed, metadata = await self.tiered_limiter.is_allowed(

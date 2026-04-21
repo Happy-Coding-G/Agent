@@ -83,6 +83,8 @@ class IngestContext:
     char_count: Optional[int] = None
     token_count: Optional[int] = None
     stage: str = "init"
+    graph_error: Optional[str] = None
+    embeddings_success: bool = False
 
 
 # ============================================================================
@@ -555,7 +557,7 @@ async def save_markdown_runnable(ctx: IngestContext) -> IngestContext:
     logger.info(f"[Save] Uploading to MinIO: {markdown_key}")
 
     try:
-        minio_service.upload_text(markdown_key, ctx.markdown_text)
+        await minio_service.upload_text(markdown_key, ctx.markdown_text)
         logger.info(f"[Save] MinIO upload successful")
     except Exception as e:
         logger.exception(f"[Save] MinIO upload failed: {e}")
@@ -657,7 +659,11 @@ async def store_embeddings_runnable(ctx: IngestContext) -> IngestContext:
     logger.info(f"[Embeddings] ========== EMBEDDINGS STAGE ==========")
     logger.info(f"[Embeddings] Doc: {ctx.doc.doc_id}, Chunks: {len(ctx.chunks)}")
 
-    texts = [c.page_content for c in ctx.chunks if c.page_content.strip()]
+    # 过滤空 content，但保留与原始 chunks 的对应关系
+    chunk_items = [
+        (idx, c) for idx, c in enumerate(ctx.chunks) if c.page_content.strip()
+    ]
+    texts = [c.page_content for _, c in chunk_items]
     if not texts:
         logger.warning("[Embeddings] No valid texts to embed")
         return ctx
@@ -686,8 +692,8 @@ async def store_embeddings_runnable(ctx: IngestContext) -> IngestContext:
             logger.exception(f"[Embeddings] Batch {batch_num} embedding failed: {e}")
             raise
 
-        for j, (chunk_doc, vector) in enumerate(
-            zip(ctx.chunks[i : i + batch_size], vectors)
+        for j, ((orig_idx, chunk_doc), vector) in enumerate(
+            zip(chunk_items[i : i + batch_size], vectors)
         ):
             try:
                 chunk = DocChunks(
@@ -714,8 +720,11 @@ async def store_embeddings_runnable(ctx: IngestContext) -> IngestContext:
                 logger.error(f"[Embeddings] Failed to store chunk {chunk_index}: {e}")
                 raise
 
+    if ctx.doc:
+        ctx.doc.status = "completed"
     await ctx.db.commit()
-    logger.info(f"[Embeddings] Database commit successful")
+    ctx.embeddings_success = True
+    logger.info(f"[Embeddings] Database commit successful, doc status set to completed")
     logger.info(
         f"[Embeddings] Stored {chunk_index} chunks with embeddings, model={model_name}"
     )
@@ -733,6 +742,10 @@ async def build_graph_runnable(ctx: IngestContext) -> IngestContext:
     3. 关系抽取 (RE)
     4. 关系属性补全
     5. 反思迭代 (默认2轮)
+
+    原子性保证：
+    - 所有抽取结果先异步收集
+    - 最终通过单个 Neo4j 显式事务写入，成功则 commit，失败则 rollback
     """
     logger.info(
         f"[Graph] Starting build_graph_runnable (multi-step extraction), "
@@ -751,70 +764,71 @@ async def build_graph_runnable(ctx: IngestContext) -> IngestContext:
         return ctx
 
     try:
-        from neo4j import GraphDatabase
+        from neo4j import AsyncGraphDatabase
     except Exception as e:
         logger.warning(
-            f"[Graph] Failed to import neo4j driver: {e}, skipping graph build"
+            f"[Graph] Failed to import neo4j async driver: {e}, skipping graph build"
         )
         return ctx
 
+    from app.ai.graph_extractor import extract_graph_from_text
+
+    chunks_to_process = ctx.chunks[:10]
+    doc_id_str = str(ctx.doc.doc_id)
+    graph_id_str = str(ctx.doc.graph_id)
+    source_file = ctx.doc.title or "unknown"
+
+    logger.info(
+        f"[Graph] Starting multi-step graph extraction for doc: {ctx.doc.doc_id}"
+    )
+
+    # Step 1: 异步抽取（允许单 chunk 失败继续）
+    extraction_results = []
+    for i, chunk in enumerate(chunks_to_process):
+        try:
+            text = chunk.page_content[:3000]
+            chunk_index = chunk.metadata.get("chunk_global_index", i)
+            episode_ref = f"{doc_id_str}:chunk_{chunk_index}"
+
+            result = await extract_graph_from_text(
+                text=text,
+                episode_ref=episode_ref,
+                reflection_iters=2,
+            )
+
+            entities = result.entities
+            relations = result.relations
+
+            logger.info(
+                f"[Graph] Chunk {i + 1}: {len(entities)} entities, {len(relations)} relations"
+            )
+
+            if entities or relations:
+                extraction_results.append((episode_ref, entities, relations))
+        except Exception as batch_e:
+            logger.error(f"[Graph] Chunk {i + 1} extraction failed: {batch_e}")
+            continue
+
+    if not extraction_results:
+        logger.info("[Graph] No graph data extracted, skipping Neo4j write")
+        return ctx
+
+    # Step 2: 通过单个显式事务写入 Neo4j，保证原子性
+    driver = AsyncGraphDatabase.driver(
+        neo4j_uri, auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+    )
     try:
-        driver = GraphDatabase.driver(
-            neo4j_uri, auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
-        )
+        async with driver.session(database=settings.NEO4J_DATABASE) as session:
+            test_result = await session.run("RETURN 1")
+            await test_result.consume()
 
-        with driver.session(database=settings.NEO4J_DATABASE) as session:
-            test_result = session.run("RETURN 1")
-            test_result.consume()
-
-        # 导入多步抽取器
-        from app.ai.graph_extractor import extract_graph_from_text
-
-        # 只处理前10个chunk
-        chunks_to_process = ctx.chunks[:10]
-
-        logger.info(
-            f"[Graph] Starting multi-step graph extraction for doc: {ctx.doc.doc_id}"
-        )
-
-        doc_id_str = str(ctx.doc.doc_id)
-        graph_id_str = str(ctx.doc.graph_id)
-        source_file = ctx.doc.title or "unknown"
-
-        total_nodes = 0
-        total_rels = 0
-
-        for i, chunk in enumerate(chunks_to_process):
-            try:
-                text = chunk.page_content[:3000]  # 稍微增加文本长度限制
-                chunk_index = chunk.metadata.get("chunk_global_index", i)
-
-                # 生成 episode_ref
-                episode_ref = f"{doc_id_str}:chunk_{chunk_index}"
-
-                # 执行多步抽取
-                result = await extract_graph_from_text(
-                    text=text,
-                    episode_ref=episode_ref,
-                    reflection_iters=2,
-                )
-
-                entities = result.entities
-                relations = result.relations
-
-                logger.info(
-                    f"[Graph] Chunk {i + 1}: {len(entities)} entities, {len(relations)} relations"
-                )
-
-                if not entities and not relations:
-                    continue
-
-                with driver.session(database=settings.NEO4J_DATABASE) as session:
-                    # 存储实体
+            async with await session.begin_transaction() as tx:
+                total_nodes = 0
+                total_rels = 0
+                for episode_ref, entities, relations in extraction_results:
                     for entity in entities:
                         labels = ":".join(entity.labels) if entity.labels else "Entity"
-
-                        session.run(
+                        await tx.run(
                             f"""
                             MERGE (e:{labels} {{name: $name, graph_id: $graph_id}})
                             SET e.description = $desc,
@@ -830,12 +844,9 @@ async def build_graph_runnable(ctx: IngestContext) -> IngestContext:
                             source_file=source_file,
                         )
 
-                    # 存储关系
                     for rel in relations:
-                        # 关系类型规范化
                         rel_type = rel.name if rel.name else "RELATED_TO"
-
-                        session.run(
+                        await tx.run(
                             """
                             MATCH (a {name: $source, graph_id: $graph_id})
                             MATCH (b {name: $target, graph_id: $graph_id})
@@ -862,23 +873,18 @@ async def build_graph_runnable(ctx: IngestContext) -> IngestContext:
                             episode_ref=episode_ref,
                         )
 
-                total_nodes += len(entities)
-                total_rels += len(relations)
-
-            except Exception as batch_e:
-                logger.error(f"[Graph] Chunk {i + 1} processing failed: {batch_e}")
-                continue
-
-        driver.close()
+                    total_nodes += len(entities)
+                    total_rels += len(relations)
 
         logger.info(
             f"[Graph] Successfully built graph for doc: {ctx.doc.doc_id}, "
             f"nodes: {total_nodes}, rels: {total_rels}"
         )
-
     except Exception as e:
         logger.exception(f"[Graph] Critical failure during graph build: {e}")
         raise
+    finally:
+        await driver.close()
 
     return ctx
 
@@ -918,22 +924,64 @@ async def initialize(ctx: IngestContext) -> IngestContext:
 
 @runnable_chain
 async def finalize(ctx: IngestContext) -> IngestContext:
-    """完成处理"""
+    """完成处理：更新任务状态，支持部分成功（向量可用，图谱可能失败）"""
     logger.info(f"[Finalize] ========== FINALIZE STAGE ==========")
 
     _cleanup_temp_file(ctx)
-    await DatabaseMixin.update_job_status(ctx, "succeeded")
+
+    if ctx.graph_error:
+        error_msg = f"Partial success: embeddings ready, graph failed: {ctx.graph_error}"
+        logger.warning(f"[Finalize] {error_msg}")
+        await DatabaseMixin.update_job_status(ctx, "succeeded", error=error_msg)
+    else:
+        await DatabaseMixin.update_job_status(ctx, "succeeded")
+
     ctx.success = True
     doc_id = ctx.doc.doc_id if ctx.doc else "unknown"
     logger.info(
-        f"[Pipeline] ========== INGEST PIPELINE COMPLETED SUCCESSFULLY =========="
+        f"[Pipeline] ========== INGEST PIPELINE COMPLETED =========="
     )
     logger.info(
         f"[Pipeline] Doc: {doc_id}, "
         f"chars: {ctx.char_count}, tokens: {ctx.token_count}, chunks: {len(ctx.chunks) if ctx.chunks else 0}"
     )
-    logger.info(f"[Pipeline] ========== INGEST PIPELINE COMPLETED ==========")
     logger.info(f"[Finalize] ========== FINALIZE STAGE DONE ==========")
+    return ctx
+
+
+async def parallel_processing_runnable(ctx: IngestContext) -> IngestContext:
+    """并行执行 embeddings 和 graph 构建；向量独立提交，图谱失败不阻塞"""
+    logger.info("[Parallel] Starting embeddings and graph branches concurrently")
+
+    emb_task = asyncio.create_task(store_embeddings_runnable(ctx))
+    graph_task = asyncio.create_task(build_graph_runnable(ctx))
+
+    emb_exc = None
+    graph_exc = None
+
+    try:
+        await emb_task
+    except Exception as e:
+        emb_exc = e
+        logger.error(f"[Parallel] Embeddings branch failed: {e}")
+
+    try:
+        await graph_task
+    except Exception as e:
+        graph_exc = e
+        logger.error(f"[Parallel] Graph branch failed: {e}")
+
+    if emb_exc:
+        raise emb_exc
+
+    if graph_exc:
+        ctx.graph_error = str(graph_exc)
+
+    logger.info(
+        "[Parallel] Embeddings: %s, Graph: %s",
+        "OK" if not emb_exc else "FAILED",
+        "OK" if not graph_exc else "FAILED",
+    )
     return ctx
 
 
@@ -947,20 +995,7 @@ def create_ingest_pipeline():
     save_step = RunnableLambda(save_markdown_runnable)
     chunk_step = RunnableLambda(chunk_document_runnable)
 
-    def merge_parallel_results(results: dict) -> IngestContext:
-        """合并并行处理结果
-
-        embeddings 和 graph 分支操作的是同一个 ctx 引用（按引用传递），
-        两边都通过副作用完成数据持久化。返回 embeddings 分支结果即可。
-        """
-        return results["embeddings"]
-
-    parallel_processing = RunnableParallel(
-        {
-            "embeddings": RunnableLambda(store_embeddings_runnable),
-            "graph": RunnableLambda(build_graph_runnable),
-        }
-    ) | RunnableLambda(merge_parallel_results)
+    parallel_processing = RunnableLambda(parallel_processing_runnable)
 
     pipeline = (
         initialize

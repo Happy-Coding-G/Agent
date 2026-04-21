@@ -1,7 +1,7 @@
 """
 TradeAgent State Definitions
 
-定义交易协商过程中的状态类型
+直接交易模式的状态类型定义
 """
 from __future__ import annotations
 
@@ -10,13 +10,13 @@ from datetime import datetime
 
 
 class TradeState(TypedDict, total=False):
-    """交易协商状态 - Agent-First 架构
+    """交易状态 - 直接交易模式
 
-    支持新的交易目标执行流程：
-    normalize_goal -> load_context -> evaluate -> select_mechanism -> execute -> settle
+    简化的执行流程：
+    normalize_goal -> load_context -> evaluate -> execute_direct_trade -> settle
     """
     # =========================================================================
-    # 输入参数（Agent-First 新增）
+    # 输入参数
     # =========================================================================
     # 核心目标
     goal_type: str  # "sell_asset", "buy_asset", "price_inquiry"
@@ -24,7 +24,7 @@ class TradeState(TypedDict, total=False):
     trade_constraints: Dict[str, Any]  # TradeConstraints 字典
 
     # 兼容性参数（旧接口）
-    action: str  # "listing", "purchase", "auction_bid", "bilateral", "yield"
+    action: str  # "listing", "purchase"
     space_public_id: str
     asset_id: str
     user_id: int
@@ -34,7 +34,6 @@ class TradeState(TypedDict, total=False):
     pricing_strategy: str
     reserve_price: Optional[float]
     license_scope: Optional[List[str]]
-    mechanism_hint: Optional[str]
     category: Optional[str]
     tags: Optional[List[str]]
 
@@ -42,10 +41,9 @@ class TradeState(TypedDict, total=False):
     listing_id: Optional[str]
     requirements: Optional[Dict[str, Any]]
     budget_max: float
-    bid_amount: Optional[float]
 
     # =========================================================================
-    # Agent-First 新增：执行上下文
+    # 执行上下文
     # =========================================================================
     # 用户配置
     user_config: Optional[Dict[str, Any]]
@@ -57,9 +55,9 @@ class TradeState(TypedDict, total=False):
     lineage_context: Optional[Dict[str, Any]]
     risk_context: Optional[Dict[str, Any]]
 
-    # 机制选择结果
-    mechanism_selection: Optional[Dict[str, Any]]  # MechanismSelection 字典
-    engine_type: Optional[str]  # "simple", "event_sourced"
+    # 机制选择结果（始终为 direct）
+    mechanism_selection: Optional[Dict[str, Any]]
+    engine_type: Optional[str]  # 始终为 "simple"
     selection_reason: Optional[str]
 
     # 审批状态
@@ -67,7 +65,7 @@ class TradeState(TypedDict, total=False):
     approval_required: bool
     pending_decision: Optional[Dict[str, Any]]
 
-    # 任务与会话关联
+    # 任务关联
     task_id: Optional[str]  # AgentTask ID
     plan_id: Optional[str]  # TradeExecutionPlan ID
 
@@ -85,9 +83,7 @@ class TradeState(TypedDict, total=False):
     current_step: Optional[str]  # 当前执行步骤
     asset_info: Optional[Dict[str, Any]]
     calculated_price: Optional[float]
-    selected_mechanism: Optional[str]
-    negotiation_id: Optional[str]
-    session_id: Optional[str]
+    selected_mechanism: Optional[str]  # 始终为 "direct"
 
     # =========================================================================
     # 元数据

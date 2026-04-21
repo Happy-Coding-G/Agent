@@ -42,7 +42,7 @@ import {
   Token as TokenIcon,
   Functions as FunctionsIcon,
 } from '@mui/icons-material';
-import { useAuthStore } from '../store/auth';
+import { useAuth } from '../store/auth';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar } from 'recharts';
 
 // API客户端
@@ -131,7 +131,7 @@ const FEATURE_COLORS: Record<string, string> = {
 const MODEL_COLORS = ['#2196F3', '#4CAF50', '#FF9800', '#9C27B0', '#F44336', '#00BCD4'];
 
 export default function TokenUsageView() {
-  const { token } = useAuthStore();
+  const token = useAuth(s => s.token);
   const [activeTab, setActiveTab] = useState(0);
   const [timeRange, setTimeRange] = useState(30);
   const [loading, setLoading] = useState(true);
@@ -383,7 +383,7 @@ export default function TokenUsageView() {
                     <YAxis yAxisId="left" />
                     <YAxis yAxisId="right" orientation="right" />
                     <RechartsTooltip
-                      formatter={(value: number, name: string) => {
+                      formatter={(value: any, name: any) => {
                         if (name === 'cost') return [formatCost(value), '成本'];
                         return [formatNumber(value), name === 'tokens' ? 'Token数' : '请求数'];
                       }}
@@ -435,7 +435,7 @@ export default function TokenUsageView() {
                         ))}
                       </Pie>
                       <RechartsTooltip
-                        formatter={(value: number, name: string, props: any) => {
+                        formatter={(value: any, name: any, props: any) => {
                           const item = featureData[props?.payload?.index];
                           return [
                             `${formatNumber(value)} tokens (${formatCost(item?.cost || 0)})`,
@@ -507,7 +507,7 @@ export default function TokenUsageView() {
                       <XAxis type="number" />
                       <YAxis dataKey="name" type="category" width={100} />
                       <RechartsTooltip
-                        formatter={(value: number, name: string, props: any) => {
+                        formatter={(value: any, name: any, props: any) => {
                           const item = modelData[props?.payload?.index];
                           return [
                             `${formatNumber(value)} tokens`,

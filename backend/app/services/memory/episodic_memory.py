@@ -49,7 +49,6 @@ class EpisodicMemory:
         """创建新会话"""
         session_id = snowflake_id()
         session = ConversationSessions(
-            id=session_id,
             session_id=f"sess_{session_id}",
             user_id=user_id,
             title=title or "新会话",
@@ -85,15 +84,16 @@ class EpisodicMemory:
         session_id: str,
         role: str,
         content: str,
+        user_id: Optional[int] = None,
         metadata: Optional[dict] = None,
         generate_embedding: bool = True,
     ) -> ConversationMessages:
         """添加消息到会话"""
         message_id = snowflake_id()
         message = ConversationMessages(
-            id=message_id,
             message_id=f"msg_{message_id}",
             session_id=session_id,
+            user_id=user_id,
             role=role,
             content=content,
             metadata=metadata or {},
@@ -102,6 +102,14 @@ class EpisodicMemory:
         if generate_embedding and content:
             try:
                 vector, model = await embed_query_with_fallback(content)
+                # 截断/填充到 1536 维（数据库 schema 限制）
+                target_dim = 1536
+                actual_dim = len(vector)
+                if actual_dim != target_dim:
+                    if actual_dim > target_dim:
+                        vector = vector[:target_dim]
+                    else:
+                        vector = vector + [0.0] * (target_dim - actual_dim)
                 message.embedding = vector
                 message.metadata["embedding_model"] = model
             except Exception as exc:
@@ -129,6 +137,7 @@ class EpisodicMemory:
         session_id: str,
         event_type: str,
         payload: dict[str, Any],
+        user_id: Optional[int] = None,
         agent_type: str = "main",
         generate_embedding: bool = False,
     ) -> ConversationMessages:
@@ -151,6 +160,7 @@ class EpisodicMemory:
             session_id=session_id,
             role="system",
             content=content,
+            user_id=user_id,
             metadata=metadata,
             generate_embedding=generate_embedding,
         )
@@ -259,6 +269,14 @@ class EpisodicMemory:
     ) -> list[dict[str, Any]]:
         """基于语义相似度搜索历史消息"""
         query_vector, _ = await embed_query_with_fallback(query)
+        # 截断/填充到 1536 维（与数据库存储一致）
+        target_dim = 1536
+        actual_dim = len(query_vector)
+        if actual_dim != target_dim:
+            if actual_dim > target_dim:
+                query_vector = query_vector[:target_dim]
+            else:
+                query_vector = query_vector + [0.0] * (target_dim - actual_dim)
 
         base_query = select(
             ConversationMessages,

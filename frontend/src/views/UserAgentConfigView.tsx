@@ -27,17 +27,19 @@ import {
   CircularProgress,
   Card,
   CardContent,
-  Grid
+  Grid,
+  Tabs,
+  Tab
 } from '@mui/material';
 import {
   Visibility,
   VisibilityOff,
   Save as SaveIcon,
-  Test as TestIcon,
+  Science as TestIcon,
   SmartToy as AgentIcon,
   Settings as SettingsIcon
 } from '@mui/icons-material';
-import { useAuthStore } from '../store/auth';
+import { useAuth } from '../store/auth';
 
 // API客户端
 const API_BASE = '/api/v1';
@@ -92,7 +94,7 @@ const providers = [
 ];
 
 export default function UserAgentConfigView() {
-  const { token } = useAuthStore();
+  const token = useAuth(s => s.token);
   const [config, setConfig] = useState<UserConfig>(defaultConfig);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -243,20 +245,20 @@ export default function UserAgentConfigView() {
   }
 
   return (
-    <Box sx={{ p: 3, maxWidth: 900, margin: '0 auto' }}>
-      <Typography variant="h4" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <AgentIcon fontSize="large" />
+    <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 900, margin: '0 auto', color: '#E2E8F0' }}>
+      <Typography variant="h4" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1.5, fontWeight: 'bold', mb: 2 }}>
+        <AgentIcon sx={{ fontSize: 36, color: '#3B82F6' }} />
         Agent 配置
       </Typography>
 
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+      <Typography variant="body2" sx={{ mb: 4, color: '#94A3B8', fontSize: '14px', lineHeight: 1.6 }}>
         配置您的个人 LLM API 和交易协商策略。这些设置将用于您的专属 Agent 进行自动化交易协商。
       </Typography>
 
       {message && (
         <Alert
           severity={message.type}
-          sx={{ mb: 2 }}
+          sx={{ mb: 3, borderRadius: 2 }}
           onClose={() => setMessage(null)}
         >
           {message.text}
@@ -264,26 +266,31 @@ export default function UserAgentConfigView() {
       )}
 
       {/* 标签切换 */}
-      <Box sx={{ mb: 3, display: 'flex', gap: 1 }}>
-        <Button
-          variant={activeTab === 'llm' ? 'contained' : 'outlined'}
-          onClick={() => setActiveTab('llm')}
-          startIcon={<SettingsIcon />}
+      <Box sx={{ mb: 4, borderBottom: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
+        <Tabs 
+          value={activeTab} 
+          onChange={(_, v) => setActiveTab(v)}
+          sx={{ 
+            '& .MuiTab-root': { textTransform: 'none', fontSize: '15px', fontWeight: 500, color: '#94A3B8' },
+            '& .Mui-selected': { color: '#3B82F6 !important' },
+            '& .MuiTabs-indicator': { backgroundColor: '#3B82F6', height: 3 }
+          }}
         >
-          LLM 配置
-        </Button>
-        <Button
-          variant={activeTab === 'trade' ? 'contained' : 'outlined'}
-          onClick={() => setActiveTab('trade')}
-          startIcon={<AgentIcon />}
-        >
-          交易策略
-        </Button>
+          <Tab value="llm" label="LLM 配置" icon={<SettingsIcon sx={{ mb: 0, mr: 1 }}/>} iconPosition="start" />
+          <Tab value="trade" label="交易策略" icon={<AgentIcon sx={{ mb: 0, mr: 1 }}/>} iconPosition="start" />
+        </Tabs>
       </Box>
 
       {activeTab === 'llm' ? (
-        <Paper sx={{ p: 3 }}>
-          <Typography variant="h6" gutterBottom>
+        <Paper sx={{ 
+          p: { xs: 3, md: 4 }, 
+          bgcolor: '#1E1E2D', 
+          border: '1px solid rgba(255,255,255,0.08)', 
+          borderRadius: 3,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.2), inset 0 1px 1px rgba(255,255,255,0.05)',
+          backdropFilter: 'blur(10px)'
+        }}>
+          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 3 }}>
             LLM 配置
           </Typography>
 
@@ -296,139 +303,176 @@ export default function UserAgentConfigView() {
             />
           )}
 
-          <Grid container spacing={3}>
+          <Grid container spacing={4}>
             <Grid item xs={12} md={6}>
-              <FormControl fullWidth>
-                <InputLabel>提供商</InputLabel>
-                <Select
-                  value={config.llm.provider}
-                  onChange={(e) => setConfig({
-                    ...config,
-                    llm: { ...config.llm, provider: e.target.value, model: '' }
-                  })}
-                >
-                  {providers.map(p => (
-                    <MenuItem key={p.value} value={p.value}>{p.label}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+              <Box>
+                <Typography variant="body2" sx={{ mb: 1, color: '#94A3B8', fontSize: '13px' }}>提供商</Typography>
+                <FormControl fullWidth size="small">
+                  <Select
+                    value={config.llm.provider}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      llm: { ...config.llm, provider: e.target.value, model: '' }
+                    })}
+                    sx={{ bgcolor: '#2A2A3A', borderRadius: 1.5, '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' } }}
+                  >
+                    {providers.map(p => (
+                      <MenuItem key={p.value} value={p.value}>{p.label}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Box>
             </Grid>
 
             <Grid item xs={12} md={6}>
-              <FormControl fullWidth>
-                <InputLabel>模型</InputLabel>
-                <Select
-                  value={config.llm.model}
-                  onChange={(e) => setConfig({
-                    ...config,
-                    llm: { ...config.llm, model: e.target.value }
-                  })}
-                >
-                  {availableModels.map(m => (
-                    <MenuItem key={m} value={m}>{m}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+              <Box>
+                <Typography variant="body2" sx={{ mb: 1, color: '#94A3B8', fontSize: '13px' }}>模型</Typography>
+                <FormControl fullWidth size="small">
+                  <Select
+                    value={config.llm.model}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      llm: { ...config.llm, model: e.target.value }
+                    })}
+                    sx={{ bgcolor: '#2A2A3A', borderRadius: 1.5, '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' } }}
+                  >
+                    {availableModels.map(m => (
+                      <MenuItem key={m} value={m}>{m}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Box>
             </Grid>
 
             <Grid item xs={12}>
-              <TextField
-                fullWidth
-                label="API Key"
-                type={showApiKey ? 'text' : 'password'}
-                value={config.llm.api_key}
-                onChange={(e) => setConfig({
-                  ...config,
-                  llm: { ...config.llm, api_key: e.target.value }
-                })}
-                placeholder={config.has_custom_api_key ? "•••••••• (已配置，留空保持不变)" : "输入您的 API Key"}
-                helperText="您的 API Key 将被加密存储"
-                InputProps={{
-                  endAdornment: (
-                    <InputAdornment position="end">
-                      <IconButton onClick={() => setShowApiKey(!showApiKey)}>
-                        {showApiKey ? <VisibilityOff /> : <Visibility />}
-                      </IconButton>
-                    </InputAdornment>
-                  ),
-                }}
-              />
+              <Box>
+                <Typography variant="body2" sx={{ mb: 1, color: '#94A3B8', fontSize: '13px' }}>API Key</Typography>
+                <TextField
+                  fullWidth
+                  size="small"
+                  type={showApiKey ? 'text' : 'password'}
+                  value={config.llm.api_key}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    llm: { ...config.llm, api_key: e.target.value }
+                  })}
+                  placeholder={config.has_custom_api_key ? "•••••••• (已配置，留空保持不变)" : "输入您的 API Key"}
+                  sx={{ bgcolor: '#2A2A3A', borderRadius: 1.5, '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' } }}
+                  InputProps={{
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <IconButton onClick={() => setShowApiKey(!showApiKey)} sx={{ color: '#94A3B8' }}>
+                          {showApiKey ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                        </IconButton>
+                      </InputAdornment>
+                    ),
+                  }}
+                />
+                <Typography variant="caption" sx={{ display: 'block', mt: 1, color: '#64748B', fontSize: '12px' }}>
+                  您的 API Key 将被加密存储，仅供您的专属 Agent 交易协商时使用。
+                </Typography>
+              </Box>
             </Grid>
 
             {config.llm.provider === 'custom' && (
               <Grid item xs={12}>
-                <TextField
-                  fullWidth
-                  label="Base URL"
-                  value={config.llm.base_url}
-                  onChange={(e) => setConfig({
-                    ...config,
-                    llm: { ...config.llm, base_url: e.target.value }
-                  })}
-                  placeholder="https://api.example.com/v1"
-                />
+                <Box>
+                  <Typography variant="body2" sx={{ mb: 1, color: '#94A3B8', fontSize: '13px' }}>Base URL</Typography>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    value={config.llm.base_url}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      llm: { ...config.llm, base_url: e.target.value }
+                    })}
+                    placeholder="https://api.example.com/v1"
+                    sx={{ bgcolor: '#2A2A3A', borderRadius: 1.5, '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' } }}
+                  />
+                </Box>
               </Grid>
             )}
 
             <Grid item xs={12} md={6}>
-              <Typography gutterBottom>
-                Temperature: {config.llm.temperature}
-              </Typography>
-              <Slider
-                value={config.llm.temperature}
-                onChange={(_, v) => setConfig({
-                  ...config,
-                  llm: { ...config.llm, temperature: v as number }
-                })}
-                min={0}
-                max={2}
-                step={0.1}
-                marks={[
-                  { value: 0, label: '确定' },
-                  { value: 1, label: '平衡' },
-                  { value: 2, label: '创意' },
-                ]}
-              />
+              <Box>
+                <Typography variant="body2" sx={{ mb: 1.5, color: '#94A3B8', fontSize: '13px' }}>
+                  Temperature <span style={{ color: '#E2E8F0', fontWeight: 'bold', marginLeft: 8 }}>{config.llm.temperature}</span>
+                </Typography>
+                <Slider
+                  value={config.llm.temperature}
+                  onChange={(_, v) => setConfig({
+                    ...config,
+                    llm: { ...config.llm, temperature: v as number }
+                  })}
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  marks={[
+                    { value: 0, label: <span style={{ color: '#64748B', fontSize: '12px' }}>确定</span> },
+                    { value: 1, label: <span style={{ color: '#64748B', fontSize: '12px' }}>平衡</span> },
+                    { value: 2, label: <span style={{ color: '#64748B', fontSize: '12px' }}>创意</span> },
+                  ]}
+                  sx={{ color: '#3B82F6', '& .MuiSlider-markLabel': { mt: 0.5 } }}
+                />
+              </Box>
             </Grid>
 
             <Grid item xs={12} md={6}>
-              <TextField
-                fullWidth
-                label="Max Tokens"
-                type="number"
-                value={config.llm.max_tokens}
-                onChange={(e) => setConfig({
-                  ...config,
-                  llm: { ...config.llm, max_tokens: parseInt(e.target.value) }
-                })}
-                inputProps={{ min: 100, max: 8192 }}
-              />
+              <Box>
+                <Typography variant="body2" sx={{ mb: 1, color: '#94A3B8', fontSize: '13px' }}>Max Tokens</Typography>
+                <TextField
+                  fullWidth
+                  size="small"
+                  type="number"
+                  value={config.llm.max_tokens}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    llm: { ...config.llm, max_tokens: parseInt(e.target.value) }
+                  })}
+                  inputProps={{ min: 100, max: 8192 }}
+                  sx={{ bgcolor: '#2A2A3A', borderRadius: 1.5, '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' } }}
+                />
+              </Box>
             </Grid>
 
             <Grid item xs={12}>
-              <TextField
-                fullWidth
-                multiline
-                rows={3}
-                label="系统提示词 (可选)"
-                value={config.llm.system_prompt}
-                onChange={(e) => setConfig({
-                  ...config,
-                  llm: { ...config.llm, system_prompt: e.target.value }
-                })}
-                placeholder="自定义 Agent 的行为和风格..."
-              />
+              <Box>
+                <Typography variant="body2" sx={{ mb: 1, color: '#94A3B8', fontSize: '13px' }}>系统提示词 (可选)</Typography>
+                <TextField
+                  fullWidth
+                  multiline
+                  rows={3}
+                  value={config.llm.system_prompt}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    llm: { ...config.llm, system_prompt: e.target.value }
+                  })}
+                  placeholder="自定义 Agent 的行为和风格..."
+                  sx={{ bgcolor: '#2A2A3A', borderRadius: 1.5, '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' } }}
+                />
+              </Box>
             </Grid>
           </Grid>
 
           <Divider sx={{ my: 3 }} />
 
-          <Box sx={{ display: 'flex', gap: 2 }}>
+          <Box sx={{ display: 'flex', gap: 2, mt: 1 }}>
             <Button
               variant="contained"
               onClick={saveLLMConfig}
               disabled={saving}
-              startIcon={saving ? <CircularProgress size={20} /> : <SaveIcon />}
+              startIcon={saving ? <CircularProgress size={20} color="inherit" /> : <SaveIcon />}
+              sx={{ 
+                bgcolor: '#3B82F6', 
+                color: '#fff', 
+                fontWeight: 'bold', 
+                textTransform: 'none', 
+                borderRadius: 2, 
+                px: 3, 
+                py: 1,
+                boxShadow: '0 4px 14px rgba(59, 130, 246, 0.4)',
+                '&:hover': { bgcolor: '#2563EB' } 
+              }}
             >
               保存配置
             </Button>
@@ -436,67 +480,91 @@ export default function UserAgentConfigView() {
               variant="outlined"
               onClick={testConnection}
               disabled={testing}
-              startIcon={testing ? <CircularProgress size={20} /> : <TestIcon />}
+              startIcon={testing ? <CircularProgress size={20} color="inherit" /> : <TestIcon />}
+              sx={{ 
+                color: '#E2E8F0', 
+                borderColor: 'rgba(255,255,255,0.2)', 
+                textTransform: 'none', 
+                borderRadius: 2, 
+                px: 3, 
+                py: 1,
+                bgcolor: 'rgba(255,255,255,0.05)',
+                '&:hover': { borderColor: 'rgba(255,255,255,0.3)', bgcolor: 'rgba(255,255,255,0.1)' } 
+              }}
             >
               测试连接
             </Button>
           </Box>
         </Paper>
       ) : (
-        <Paper sx={{ p: 3 }}>
-          <Typography variant="h6" gutterBottom>
+        <Paper sx={{ 
+          p: { xs: 3, md: 4 }, 
+          bgcolor: '#1E1E2D', 
+          border: '1px solid rgba(255,255,255,0.08)', 
+          borderRadius: 3,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.2), inset 0 1px 1px rgba(255,255,255,0.05)',
+          backdropFilter: 'blur(10px)'
+        }}>
+          <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 3 }}>
             交易协商策略
           </Typography>
 
-          <Grid container spacing={3}>
+          <Grid container spacing={4}>
             <Grid item xs={12}>
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={config.trade.auto_negotiate}
-                    onChange={(e) => setConfig({
-                      ...config,
-                      trade: { ...config.trade, auto_negotiate: e.target.checked }
-                    })}
-                  />
-                }
-                label="启用自动协商"
-              />
-              <Typography variant="caption" color="text.secondary" display="block">
-                开启后，Agent 将根据您的策略自动与对方进行价格协商
-              </Typography>
+              <Box sx={{ bgcolor: '#2A2A3A', p: 3, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)' }}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={config.trade.auto_negotiate}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        trade: { ...config.trade, auto_negotiate: e.target.checked }
+                      })}
+                      color="primary"
+                    />
+                  }
+                  label={<Typography sx={{ fontWeight: 'medium' }}>启用自动协商</Typography>}
+                  sx={{ color: '#E2E8F0' }}
+                />
+                <Typography variant="body2" sx={{ color: '#94A3B8', mt: 1, ml: 4 }}>
+                  开启后，Agent 将根据您的策略自动与对方进行价格协商
+                </Typography>
+              </Box>
             </Grid>
 
             <Grid item xs={12}>
-              <Typography gutterBottom>
-                最大协商轮数: {config.trade.max_rounds}
-              </Typography>
-              <Slider
-                value={config.trade.max_rounds}
-                onChange={(_, v) => setConfig({
-                  ...config,
-                  trade: { ...config.trade, max_rounds: v as number }
-                })}
-                min={1}
-                max={50}
-                step={1}
-                marks={[
-                  { value: 5, label: '5' },
-                  { value: 10, label: '10' },
-                  { value: 20, label: '20' },
-                  { value: 50, label: '50' },
-                ]}
-              />
+              <Box sx={{ px: 1 }}>
+                <Typography variant="body2" sx={{ mb: 1.5, color: '#94A3B8', fontSize: '13px' }}>
+                  最大协商轮数 <span style={{ color: '#E2E8F0', fontWeight: 'bold', marginLeft: 8 }}>{config.trade.max_rounds}</span>
+                </Typography>
+                <Slider
+                  value={config.trade.max_rounds}
+                  onChange={(_, v) => setConfig({
+                    ...config,
+                    trade: { ...config.trade, max_rounds: v as number }
+                  })}
+                  min={1}
+                  max={50}
+                  step={1}
+                  marks={[
+                    { value: 5, label: <span style={{ color: '#64748B', fontSize: '12px' }}>5</span> },
+                    { value: 10, label: <span style={{ color: '#64748B', fontSize: '12px' }}>10</span> },
+                    { value: 20, label: <span style={{ color: '#64748B', fontSize: '12px' }}>20</span> },
+                    { value: 50, label: <span style={{ color: '#64748B', fontSize: '12px' }}>50</span> },
+                  ]}
+                  sx={{ color: '#3B82F6', '& .MuiSlider-markLabel': { mt: 0.5 } }}
+                />
+              </Box>
             </Grid>
 
             <Grid item xs={12} md={6}>
-              <Card variant="outlined">
-                <CardContent>
-                  <Typography variant="subtitle2" gutterBottom color="primary">
+              <Card sx={{ bgcolor: '#2A2A3A', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2 }}>
+                <CardContent sx={{ p: 3 }}>
+                  <Typography variant="subtitle1" gutterBottom sx={{ color: '#3B82F6', fontWeight: 600, mb: 2 }}>
                     卖方策略
                   </Typography>
-                  <Typography gutterBottom>
-                    最小利润率: {(config.trade.min_profit_margin * 100).toFixed(0)}%
+                  <Typography variant="body2" sx={{ mb: 1, color: '#E2E8F0' }}>
+                    最小利润率 <span style={{ fontWeight: 'bold', marginLeft: 8 }}>{(config.trade.min_profit_margin * 100).toFixed(0)}%</span>
                   </Typography>
                   <Slider
                     value={config.trade.min_profit_margin}
@@ -509,8 +577,9 @@ export default function UserAgentConfigView() {
                     step={0.05}
                     valueLabelDisplay="auto"
                     valueLabelFormat={(v) => `${(v * 100).toFixed(0)}%`}
+                    sx={{ color: '#3B82F6' }}
                   />
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography variant="caption" sx={{ color: '#94A3B8', display: 'block', mt: 1 }}>
                     低于此利润率的报价将被自动拒绝
                   </Typography>
                 </CardContent>
@@ -518,13 +587,13 @@ export default function UserAgentConfigView() {
             </Grid>
 
             <Grid item xs={12} md={6}>
-              <Card variant="outlined">
-                <CardContent>
-                  <Typography variant="subtitle2" gutterBottom color="secondary">
+              <Card sx={{ bgcolor: '#2A2A3A', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2 }}>
+                <CardContent sx={{ p: 3 }}>
+                  <Typography variant="subtitle1" gutterBottom sx={{ color: '#8B5CF6', fontWeight: 600, mb: 2 }}>
                     买方策略
                   </Typography>
-                  <Typography gutterBottom>
-                    最大预算比例: {(config.trade.max_budget_ratio * 100).toFixed(0)}%
+                  <Typography variant="body2" sx={{ mb: 1, color: '#E2E8F0' }}>
+                    最大预算比例 <span style={{ fontWeight: 'bold', marginLeft: 8 }}>{(config.trade.max_budget_ratio * 100).toFixed(0)}%</span>
                   </Typography>
                   <Slider
                     value={config.trade.max_budget_ratio}
@@ -537,8 +606,9 @@ export default function UserAgentConfigView() {
                     step={0.05}
                     valueLabelDisplay="auto"
                     valueLabelFormat={(v) => `${(v * 100).toFixed(0)}%`}
+                    sx={{ color: '#8B5CF6' }}
                   />
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography variant="caption" sx={{ color: '#94A3B8', display: 'block', mt: 1 }}>
                     高于此预算比例的报价将被自动拒绝
                   </Typography>
                 </CardContent>
@@ -546,16 +616,30 @@ export default function UserAgentConfigView() {
             </Grid>
           </Grid>
 
-          <Divider sx={{ my: 3 }} />
+          <Divider sx={{ my: 4, borderColor: 'rgba(255,255,255,0.05)' }} />
 
-          <Button
-            variant="contained"
-            onClick={saveTradeConfig}
-            disabled={saving}
-            startIcon={saving ? <CircularProgress size={20} /> : <SaveIcon />}
-          >
-            保存策略
-          </Button>
+          <Box sx={{ mt: 1 }}>
+            <Button
+              variant="contained"
+              onClick={saveTradeConfig}
+              disabled={saving}
+              startIcon={saving ? <CircularProgress size={20} color="inherit" /> : <SaveIcon />}
+              sx={{ 
+                bgcolor: '#3B82F6', 
+                color: '#fff', 
+                fontWeight: 'bold', 
+                textTransform: 'none', 
+                borderRadius: 2, 
+                px: 3, 
+                py: 1,
+                boxShadow: '0 4px 14px rgba(59, 130, 246, 0.4)',
+                '&:hover': { bgcolor: '#2563EB' } 
+              }}
+            >
+              保存策略
+            </Button>
+          </Box>
+
         </Paper>
       )}
     </Box>

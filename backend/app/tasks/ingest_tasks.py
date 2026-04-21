@@ -7,11 +7,27 @@ import logging
 import uuid
 from typing import Optional
 
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy.pool import NullPool
+
 from app.core.celery_config import celery_app
-from app.db.session import AsyncSessionLocal
+from app.core.config import settings
+from app.db.session import _build_connect_args
 from app.ai.ingest_pipeline import LangChainIngestPipeline
 
 logger = logging.getLogger(__name__)
+
+
+def _create_task_session_maker():
+    """为每个 Celery 任务创建独立的 engine + session（避免 asyncpg 跨 event loop 问题）"""
+    engine = create_async_engine(
+        settings.ASYNC_DATABASE_URL,
+        pool_pre_ping=True,
+        connect_args=_build_connect_args(),
+        poolclass=NullPool,
+    )
+    session_maker = async_sessionmaker(bind=engine, expire_on_commit=False)
+    return engine, session_maker
 
 
 @celery_app.task(
@@ -71,34 +87,42 @@ def process_ingest_job(self, ingest_id: str):
 
 async def _run_ingest_pipeline(ingest_id: str):
     """运行 Ingest Pipeline"""
-    async with AsyncSessionLocal() as session:
-        try:
-            pipeline = LangChainIngestPipeline(session)
-            await pipeline.run(ingest_id)
-            return {"success": True}
-        except Exception as e:
-            logger.exception(f"Pipeline execution failed: {e}")
-            raise
+    engine, SessionLocal = _create_task_session_maker()
+    try:
+        async with SessionLocal() as session:
+            try:
+                pipeline = LangChainIngestPipeline(session)
+                await pipeline.run(ingest_id)
+                return {"success": True}
+            except Exception as e:
+                logger.exception(f"Pipeline execution failed: {e}")
+                raise
+    finally:
+        await engine.dispose()
 
 
 async def _mark_job_failed(ingest_id: str, error_message: str):
     """标记任务为失败状态"""
-    async with AsyncSessionLocal() as session:
-        try:
-            from sqlalchemy import select
-            from app.db.models import IngestJobs
+    engine, SessionLocal = _create_task_session_maker()
+    try:
+        async with SessionLocal() as session:
+            try:
+                from sqlalchemy import select
+                from app.db.models import IngestJobs
 
-            stmt = select(IngestJobs).where(
-                IngestJobs.ingest_id == uuid.UUID(ingest_id)
-            )
-            result = await session.execute(stmt)
-            job = result.scalar_one_or_none()
+                stmt = select(IngestJobs).where(
+                    IngestJobs.ingest_id == uuid.UUID(ingest_id)
+                )
+                result = await session.execute(stmt)
+                job = result.scalar_one_or_none()
 
-            if job:
-                job.status = "failed"
-                job.error = error_message
-                await session.commit()
-                logger.info(f"[Celery] Marked job as failed: {ingest_id}")
-        except Exception as e:
-            logger.exception(f"[Celery] Failed to mark job as failed: {e}")
-            await session.rollback()
+                if job:
+                    job.status = "failed"
+                    job.error = error_message
+                    await session.commit()
+                    logger.info(f"[Celery] Marked job as failed: {ingest_id}")
+            except Exception as e:
+                logger.exception(f"[Celery] Failed to mark job as failed: {e}")
+                await session.rollback()
+    finally:
+        await engine.dispose()

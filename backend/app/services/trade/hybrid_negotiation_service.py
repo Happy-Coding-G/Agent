@@ -51,7 +51,6 @@ class NegotiationMechanism(str, Enum):
     """协商机制类型"""
     BILATERAL = "bilateral"      # 双边协商（1对1）
     AUCTION = "auction"          # 拍卖（1对N）
-    CONTRACT_NET = "contract_net"  # 合同网（任务招标）
 
 
 class ConcurrencyLevel(str, Enum):
@@ -99,7 +98,7 @@ class ScenarioRouter:
         1. 双边协商 (mechanism=bilateral) → 简化版
         2. 拍卖且参与者 <= 2 → 简化版（小范围拍卖）
         3. 拍卖且参与者 > 2 → 事件溯源版
-        4. 合同网 → 事件溯源版（通常多投标者）
+        4. 默认使用简化版
         """
         mechanism = NegotiationMechanism(mechanism_type)
 
@@ -140,16 +139,6 @@ class ScenarioRouter:
                     requires_full_audit=True,
                     recommended_engine="event_sourced",
                 )
-
-        # 合同网默认使用事件溯源
-        if mechanism == NegotiationMechanism.CONTRACT_NET:
-            return ScenarioProfile(
-                mechanism_type=mechanism,
-                participant_count=expected_participants,
-                expected_concurrency=ConcurrencyLevel.MEDIUM,
-                requires_full_audit=True,
-                recommended_engine="event_sourced",
-            )
 
         # 默认使用简化版
         return ScenarioProfile(

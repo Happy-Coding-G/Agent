@@ -19,11 +19,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        'uploads',
-        sa.Column('expected_object_key', sa.String(length=512), nullable=True)
+    op.execute(
+        "ALTER TABLE IF EXISTS uploads ADD COLUMN IF NOT EXISTS expected_object_key VARCHAR(512)"
     )
 
 
 def downgrade() -> None:
-    op.drop_column('uploads', 'expected_object_key')
+    op.execute(
+        "ALTER TABLE IF EXISTS uploads DROP COLUMN IF EXISTS expected_object_key"
+    )

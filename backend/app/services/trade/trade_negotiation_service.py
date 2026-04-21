@@ -695,7 +695,7 @@ class TradeNegotiationService:
         announcement: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        卖方发布公告（拍卖/合同网）。
+        卖方发布公告（拍卖）。
 
         Args:
             announcement: 公告内容 {
@@ -1442,8 +1442,8 @@ class TradeNegotiationService:
             success=True,
             session_id=session.negotiation_id,
             status=NegotiationStatus(session.status),
-            mechanism=MechanismType.AUCTION,
-            engine=EngineType.EVENT_SOURCED,
+            mechanism=MechanismType.DIRECT,
+            engine=EngineType.SIMPLE,
             seller_id=session.seller_user_id,
             buyer_id=session.buyer_user_id,
             winner_id=session.winner_user_id,
@@ -1465,8 +1465,8 @@ class TradeNegotiationService:
 
         return SessionState(
             session_id=session.negotiation_id,
-            mechanism=MechanismType.AUCTION,
-            engine=EngineType.EVENT_SOURCED,
+            mechanism=MechanismType.DIRECT,
+            engine=EngineType.SIMPLE,
             status=NegotiationStatus(session.status),
             seller_id=session.seller_user_id,
             buyer_id=session.buyer_user_id,

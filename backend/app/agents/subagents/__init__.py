@@ -1,14 +1,19 @@
-"""Sub-agent package with lazy exports."""
+"""Sub-agent package with lazy exports.
+
+Backward compatibility: re-exports AgentRegistry as SubAgentRegistry
+for legacy code that imports from this module.
+"""
 
 from importlib import import_module
 
 _EXPORTS = {
-    "FileQueryAgent": ("app.agents.subagents.file_query_agent", "FileQueryAgent"),
     "QAAgent": ("app.agents.subagents.qa_agent", "QAAgent"),
     "ReviewAgent": ("app.agents.subagents.review_agent", "ReviewAgent"),
     "AssetOrganizeAgent": ("app.agents.subagents.asset_organize_agent", "AssetOrganizeAgent"),
     "TradeAgent": ("app.agents.subagents.trade", "TradeAgent"),
-    "SubAgentRegistry": ("app.agents.subagents.registry", "SubAgentRegistry"),
+    # SubAgentRegistry is now an alias for AgentRegistry
+    "SubAgentRegistry": ("app.agents.agents.registry", "AgentRegistry"),
+    "AgentRegistry": ("app.agents.agents.registry", "AgentRegistry"),
     "DynamicWorkflowSubAgent": ("app.agents.subagents.template", "DynamicWorkflowSubAgent"),
     "SubAgentTemplate": ("app.agents.subagents.template", "SubAgentTemplate"),
 }

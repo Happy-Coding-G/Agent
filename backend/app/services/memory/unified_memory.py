@@ -84,6 +84,7 @@ class UnifiedMemoryService:
             session_id=session_id,
             role=role,
             content=content,
+            user_id=self.user_id,
             metadata={**(metadata or {}), "agent_type": agent_type},
             generate_embedding=True,
         )
@@ -216,6 +217,7 @@ class UnifiedMemoryService:
             session_id=sid,
             event_type=event_type,
             payload=payload,
+            user_id=self.user_id,
             agent_type=agent_type,
         )
 

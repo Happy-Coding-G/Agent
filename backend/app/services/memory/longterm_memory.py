@@ -172,7 +172,6 @@ class LongTermMemory:
         memory_id = f"mem_{snowflake_id()}"
 
         memory = UserMemories(
-            id=snowflake_id(),
             memory_id=memory_id,
             user_id=user_id,
             content=content,
@@ -186,6 +185,14 @@ class LongTermMemory:
         if generate_embedding:
             try:
                 vector, model = await embed_query_with_fallback(content)
+                # 截断/填充到 1536 维（数据库 schema 限制）
+                target_dim = 1536
+                actual_dim = len(vector)
+                if actual_dim != target_dim:
+                    if actual_dim > target_dim:
+                        vector = vector[:target_dim]
+                    else:
+                        vector = vector + [0.0] * (target_dim - actual_dim)
                 memory.embedding = vector
                 memory.context["embedding_model"] = model
             except Exception as exc:
@@ -240,6 +247,14 @@ class LongTermMemory:
     ) -> list[dict[str, Any]]:
         """基于语义相似度搜索记忆"""
         query_vector, _ = await embed_query_with_fallback(query)
+        # 截断/填充到 1536 维（与数据库存储一致）
+        target_dim = 1536
+        actual_dim = len(query_vector)
+        if actual_dim != target_dim:
+            if actual_dim > target_dim:
+                query_vector = query_vector[:target_dim]
+            else:
+                query_vector = query_vector + [0.0] * (target_dim - actual_dim)
 
         base_query = select(
             UserMemories,

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useWorkbench } from "../store/workbench";
 
 type TabType = "debug" | "audit" | "tool-calls";
@@ -77,11 +77,7 @@ export default function BottomPanel() {
 
   const addLog = useWorkbench(s => s.addLog);
   
-  useEffect(() => {
-    if (logs.length > 0 && collapsed) {
-      setCollapsed(false);
-    }
-  }, [logs.length, collapsed]);
+  // Auto-expand removed by design: bottom panel stays collapsed by default
 
   const getFilteredLogs = () => {
     return logs.map(parseLogEntry);
@@ -94,26 +90,22 @@ export default function BottomPanel() {
 
   if (collapsed) {
     return (
-      <div 
-        style={{ 
-          borderTop: "1px solid var(--border)",
-          background: "var(--panel-2)",
-          cursor: "pointer"
-        }}
+      <div
+        className="bottompanel-collapsed"
         onClick={() => {
           setCollapsed(false);
           setBottomHeight(180);
         }}
       >
-        <div style={{ 
-          padding: "4px 12px", 
+        <div style={{
+          padding: "4px 12px",
           fontSize: "11px",
           color: "var(--text-muted)",
           display: "flex",
           alignItems: "center",
           gap: "8px"
         }}>
-          <span>▼ OUTPUT</span>
+          <span>▲ OUTPUT</span>
           {logs.length > 0 && (
             <span className="badge badge-primary" style={{ fontSize: "10px" }}>
               {logs.length}

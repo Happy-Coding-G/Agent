@@ -397,7 +397,7 @@
 | `negotiation_id` | `String(32) UQ` | 协商唯一标识 |
 | `seller_user_id` / `buyer_user_id` | `BigInteger FK` | 参与双方 |
 | `listing_id` / `asset_id` | `String(32)` | 关联挂牌/资产 |
-| `mechanism_type` | `Enum` | 机制：`fixed_price` / `bilateral` / `auction` / `contract_net` / `blackboard` |
+| `mechanism_type` | `Enum` | 机制：`fixed_price` / `bilateral` / `auction` / `blackboard` |
 | `max_rounds` | `Integer` | 最大协商轮数 |
 | `status` | `Enum` | 状态：`pending` / `active` / `paused` / `agreed` / `settled` / `cancelled` / `terminated` / `disputed` |
 | `current_round` | `Integer` | 当前轮次 |
@@ -867,7 +867,7 @@
 | `order_status` | `pending`, `completed`, `cancelled`, `refunded`, `disputed` |
 | `yield_strategy` | `conservative`, `balanced`, `aggressive` |
 | `negotiation_status` | `pending`, `active`, `paused`, `agreed`, `settled`, `cancelled`, `terminated`, `disputed` |
-| `mechanism_type` | `fixed_price`, `bilateral`, `auction`, `contract_net`, `blackboard` |
+| `mechanism_type` | `fixed_price`, `bilateral`, `auction`, `blackboard` |
 | `message_type` | `ANNOUNCE`, `BID`, `OFFER`, `COUNTER`, `ACCEPT`, `REJECT`, `QUERY`, `RESPONSE`, `COMMIT`, `SETTLE` |
 | `message_status` | `pending`, `delivered`, `processed`, `failed` |
 | `blackboard_event_type` | `BID`, `OFFER`, `COUNTER`, `ACCEPT`, `REJECT`, `WITHDRAW`, `CEILING_SET`, `FLOOR_SET`, `AGREEMENT`, `TIMEOUT` |
