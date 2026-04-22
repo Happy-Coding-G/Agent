@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Any, Union
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import numpy as np
 from scipy import stats
@@ -68,7 +68,7 @@ class PriceThresholds:
         if self.distribution_params is None:
             self.distribution_params = {}
         if self.generated_at is None:
-            self.generated_at = datetime.utcnow()
+            self.generated_at = datetime.now(timezone.utc)
         if self.confidence_interval_95 is None:
             self.confidence_interval_95 = (self.aggressive, self.conservative)
 

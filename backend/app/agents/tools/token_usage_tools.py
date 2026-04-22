@@ -34,13 +34,13 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
     ) -> Dict[str, Any]:
         from app.services.token_usage_service import TokenUsageService
         from app.db.models import FeatureType
-        from datetime import datetime, timedelta
+        from datetime import datetime, timezone, timedelta
         service = TokenUsageService(db)
 
         try:
             if action == "summary":
-                start = datetime.utcnow() - timedelta(days=days)
-                end = datetime.utcnow()
+                start = datetime.now(timezone.utc) - timedelta(days=days)
+                end = datetime.now(timezone.utc)
                 result = await service.get_user_usage_summary(user.id, start_date=start, end_date=end)
                 return {"success": True, "data": result}
             elif action == "daily":

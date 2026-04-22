@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional, Dict, List
 
@@ -277,7 +277,7 @@ class AuditLogger:
         # TODO: 查询用户常用IP列表进行对比
 
         # 检查是否是非工作时间
-        current_hour = datetime.utcnow().hour
+        current_hour = datetime.now(timezone.utc).hour
         if current_hour < 6 or current_hour > 22:
             risk_score += 0.1
             risk_reasons.append("off_hours_access")
@@ -320,7 +320,7 @@ class AuditLogger:
         result: str,
     ) -> str:
         """计算日志完整性哈希（用于防篡改验证）"""
-        data = f"{log_id}:{action}:{user_id}:{resource_id}:{result}:{datetime.utcnow().isoformat()}"
+        data = f"{log_id}:{action}:{user_id}:{resource_id}:{result}:{datetime.now(timezone.utc).isoformat()}"
         return hashlib.sha256(data.encode()).hexdigest()
 
     async def _send_alert(self, log_entry: AuditLogs):
@@ -418,7 +418,7 @@ class AuditLogger:
         Returns:
             活动摘要
         """
-        from_time = datetime.utcnow() - __import__('datetime').timedelta(days=days)
+        from_time = datetime.now(timezone.utc) - __import__('datetime').timedelta(days=days)
 
         # 总操作数
         total_count = await db.scalar(
@@ -492,7 +492,7 @@ class AuditLogger:
         Returns:
             异常列表
         """
-        from_time = datetime.utcnow() - __import__('datetime').timedelta(days=days)
+        from_time = datetime.now(timezone.utc) - __import__('datetime').timedelta(days=days)
 
         logs = await self.query_logs(
             db,

@@ -69,7 +69,13 @@ class AssetService(SpaceAwareService):
             "source_asset_ids": asset.source_asset_ids or [],
         }
 
-    async def list_assets(self, space_public_id: str, user: Users):
+    async def list_assets(
+        self,
+        space_public_id: str,
+        user: Users,
+        limit: int = 100,
+        offset: int = 0,
+    ):
         await self._require_space(space_public_id, user)
 
         result = await self.db.execute(
@@ -81,6 +87,8 @@ class AssetService(SpaceAwareService):
                 )
             )
             .order_by(DataAssets.created_at.desc())
+            .limit(limit)
+            .offset(offset)
         )
         db_assets = result.scalars().all()
 
@@ -265,11 +273,12 @@ class AssetService(SpaceAwareService):
                     f"No derivative_right for source asset: {src_id}",
                 )
 
-    async def _list_docs(self, space_db_id: int) -> list[dict[str, Any]]:
+    async def _list_docs(self, space_db_id: int, limit: int = 200) -> list[dict[str, Any]]:
         q = await self.db.execute(
             select(Documents)
             .where(Documents.space_id == space_db_id)
             .order_by(Documents.updated_at.desc())
+            .limit(limit)
         )
         docs = q.scalars().all()
         result = []

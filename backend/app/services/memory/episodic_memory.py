@@ -12,7 +12,7 @@ L4 中期记忆 (Episodic Memory) - PostgreSQL 实现
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
 from sqlalchemy import and_, desc, func, select
@@ -120,7 +120,7 @@ class EpisodicMemory:
         session = await self.get_session(session_id)
         if session:
             session.message_count = (session.message_count or 0) + 1
-            session.last_message_at = datetime.utcnow()
+            session.last_message_at = datetime.now(timezone.utc)
 
         await self.db.commit()
         await self.db.refresh(message)
@@ -412,7 +412,7 @@ class EpisodicMemory:
         batch_size: int = 100,
     ) -> int:
         """清理过期的归档会话"""
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
 
         query = (
             select(ConversationSessions.session_id)

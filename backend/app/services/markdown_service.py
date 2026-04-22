@@ -33,12 +33,20 @@ class MarkdownDocumentService(SpaceAwareService):
             raise ServiceError(404, "Markdown document not found")
         return doc
 
-    async def list_documents(self, space_public_id: str, user: Users):
+    async def list_documents(
+        self,
+        space_public_id: str,
+        user: Users,
+        limit: int = 100,
+        offset: int = 0,
+    ):
         space_db_id = await self._require_space(space_public_id, user)
         q = await self.db.execute(
             select(Documents)
             .where(Documents.space_id == space_db_id)
             .order_by(Documents.updated_at.desc())
+            .limit(limit)
+            .offset(offset)
         )
         docs = q.scalars().all()
         return [

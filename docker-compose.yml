@@ -3,9 +3,16 @@ version: "3.9"
 # =============================================================================
 # Agent Data Space Platform — Docker Compose
 # =============================================================================
-# Usage:
-#   1. Copy backend/.env.example → backend/app/.env and fill in real values
-#   2. docker compose up -d
+# Usage (development):
+#   1. Copy backend/.env.example → backend/app/.env and fill in real values.
+#   2. Copy .env.compose.example → .env.compose and set strong passwords.
+#   3. docker compose --env-file .env.compose up -d
+#
+# ⚠️  PRODUCTION WARNING:
+#   The default credential values below are for LOCAL DEVELOPMENT ONLY.
+#   Never deploy to production without overriding every *_PASSWORD / *_USER
+#   via environment variables or a secrets manager.
+#   Set DB_SSLMODE=require for production PostgreSQL connections.
 # =============================================================================
 
 services:
@@ -13,15 +20,16 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: dataspace
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      # ⚠️ Change POSTGRES_PASSWORD for any non-local deployment
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-dataspace}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 5s
       retries: 5
 
@@ -38,23 +46,33 @@ services:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      # ⚠️ Change MINIO_ROOT_USER / MINIO_ROOT_PASSWORD for any non-local deployment
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
       - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      retries: 5
 
   neo4j:
     image: neo4j:5
     environment:
-      NEO4J_AUTH: neo4j/neo4jpassword
+      # ⚠️ Change NEO4J_AUTH (format: user/password) for any non-local deployment
+      NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/neo4jpassword}
     ports:
       - "7474:7474"
       - "7687:7687"
     volumes:
       - neo4jdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      retries: 10
 
   # ---------- Application -----------------------------------------------------
   backend:
@@ -65,12 +83,15 @@ services:
       - ./backend/app/.env
     environment:
       # Override defaults for docker-compose networking
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/dataspace
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-dataspace}
       REDIS_URL: redis://redis:6379/0
       NEO4J_URI: bolt://neo4j:7687
-      NEO4J_PASSWORD: neo4jpassword
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-neo4jpassword}
       MINIO_ENDPOINT: minio:9000
-      DB_SSLMODE: disable
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      # ⚠️ Set DB_SSLMODE=require for production
+      DB_SSLMODE: ${DB_SSLMODE:-disable}
     ports:
       - "8000:8000"
     depends_on:
@@ -79,9 +100,9 @@ services:
       redis:
         condition: service_healthy
       minio:
-        condition: service_started
+        condition: service_healthy
       neo4j:
-        condition: service_started
+        condition: service_healthy
 
   celery-worker:
     build:
@@ -91,12 +112,14 @@ services:
     env_file:
       - ./backend/app/.env
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/dataspace
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-dataspace}
       REDIS_URL: redis://redis:6379/0
       NEO4J_URI: bolt://neo4j:7687
-      NEO4J_PASSWORD: neo4jpassword
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-neo4jpassword}
       MINIO_ENDPOINT: minio:9000
-      DB_SSLMODE: disable
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      DB_SSLMODE: ${DB_SSLMODE:-disable}
     depends_on:
       postgres:
         condition: service_healthy

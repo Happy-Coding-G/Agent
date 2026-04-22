@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import uuid
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
@@ -66,7 +66,7 @@ class DecisionLogService:
             reason=reason,
             context=context,
             alternatives_considered=alternatives_considered or [],
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
 
         # TODO: 持久化到数据库

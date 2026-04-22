@@ -49,11 +49,12 @@ class KnowledgeGraphService(SpaceAwareService):
     def _save_graph_state(self, space_public_id: str, state: dict[str, Any]) -> None:
         save_state("graphs", space_public_id, state)
 
-    async def _list_docs(self, space_db_id: int) -> list[Documents]:
+    async def _list_docs(self, space_db_id: int, limit: int = 200) -> list[Documents]:
         q = await self.db.execute(
             select(Documents)
             .where(Documents.space_id == space_db_id)
             .order_by(Documents.updated_at.desc())
+            .limit(limit)
         )
         return q.scalars().all()
 

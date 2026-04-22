@@ -2,7 +2,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_v1_router
-from app.core.exception_handlers import setup_exception_handlers
+from app.core.exception_handlers import setup_exception_handlers, SecurityHeadersMiddleware
 from app.core.rate_limit import RateLimitMiddleware
 from app.core.config import settings
 from app.core.logging_config import setup_logging
@@ -46,6 +46,9 @@ def create_app() -> FastAPI:
 
     # 设置全局异常处理器（必须在限流之前）
     setup_exception_handlers(app)
+
+    # HTTP 安全响应头（在 CORS 之后注册，优先级最高）
+    app.add_middleware(SecurityHeadersMiddleware)
 
     # CORS 中间件
     app.add_middleware(

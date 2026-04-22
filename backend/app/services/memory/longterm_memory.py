@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
 from sqlalchemy import and_, desc, func, select
@@ -66,7 +66,7 @@ class LongTermMemory:
             existing.value = value_str
             existing.confidence = (existing.confidence + confidence) / 2
             existing.source = source
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(timezone.utc)
             pref = existing
         else:
             pref = UserPreferences(
@@ -228,7 +228,7 @@ class LongTermMemory:
             query = query.where(
                 and_(
                     UserMemories.expires_at.is_(None),
-                    UserMemories.expires_at > datetime.utcnow(),
+                    UserMemories.expires_at > datetime.now(timezone.utc),
                 )
             )
 
@@ -459,7 +459,7 @@ class LongTermMemory:
             select(UserMemories).where(
                 and_(
                     UserMemories.user_id == user_id,
-                    UserMemories.expires_at < datetime.utcnow(),
+                    UserMemories.expires_at < datetime.now(timezone.utc),
                 )
             )
         )

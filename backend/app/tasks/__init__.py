@@ -37,7 +37,7 @@ def export_documents(self, space_id: str, format: str = "json"):
     """
     import asyncio
     import json
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     try:
         # 异步执行导出逻辑
@@ -48,7 +48,7 @@ def export_documents(self, space_id: str, format: str = "json"):
             "space_id": space_id,
             "format": format,
             "file_count": result.get("count", 0),
-            "exported_at": datetime.utcnow().isoformat(),
+            "exported_at": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as exc:
         if self.request.retries < self.max_retries:
@@ -237,7 +237,7 @@ def generate_space_report(self, space_id: str, report_type: str = "weekly"):
         report_type: 报告类型 (daily, weekly, monthly)
     """
     import asyncio
-    from datetime import datetime, timedelta
+    from datetime import datetime, timezone, timedelta
 
     # 计算时间范围
     if report_type == "daily":
@@ -247,14 +247,14 @@ def generate_space_report(self, space_id: str, report_type: str = "weekly"):
     else:  # monthly
         days = 30
 
-    start_date = datetime.utcnow() - timedelta(days=days)
+    start_date = datetime.now(timezone.utc) - timedelta(days=days)
 
     # 生成报告逻辑
     report_data = {
         "space_id": space_id,
         "report_type": report_type,
         "start_date": start_date.isoformat(),
-        "end_date": datetime.utcnow().isoformat(),
+        "end_date": datetime.now(timezone.utc).isoformat(),
         "metrics": {
             "total_documents": 0,
             "total_chats": 0,

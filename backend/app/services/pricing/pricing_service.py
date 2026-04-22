@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 import numpy as np
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -80,7 +80,7 @@ class PricingRecommendation:
 
     def __post_init__(self):
         if self.generated_at is None:
-            self.generated_at = datetime.utcnow()
+            self.generated_at = datetime.now(timezone.utc)
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""

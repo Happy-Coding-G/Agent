@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -14,6 +15,8 @@ from app.api.deps.auth import get_current_user, get_db
 from app.db.models import Users
 from app.services.data_rights import RightsEnforcementEngine, enforce_data_access
 from app.core.errors import ServiceError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/data-rights", tags=["data-rights"])
 
@@ -106,10 +109,13 @@ async def access_data_with_rights(
             message="Access permitted with rights enforcement",
         )
 
+    except HTTPException:
+        raise
     except ServiceError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+    except Exception:
+        logger.exception("Unexpected error in data rights access")
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.get("/stats/{transaction_id}", response_model=UsageStatsResponse)
@@ -138,7 +144,7 @@ async def get_usage_statistics(
         )
 
     except ServiceError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e))
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
 
 
 @router.post("/validate")
@@ -174,5 +180,5 @@ async def validate_rights(
             "valid": False,
             "transaction_id": transaction_id,
             "access_type": access_type,
-            "message": str(e),
+            "message": e.detail,
         }

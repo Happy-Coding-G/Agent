@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
@@ -118,7 +118,7 @@ class MarketAnalysisSkill:
         分析特定数据类型的交易趋势。
         """
         try:
-            since = datetime.utcnow() - timedelta(days=days)
+            since = datetime.now(timezone.utc) - timedelta(days=days)
 
             # 查询交易统计
             stmt = select(
@@ -205,7 +205,7 @@ class MarketAnalysisSkill:
                 "total_transactions": total_transactions,
                 "active_assets": active_assets,
                 "type_distribution": type_distribution,
-                "generated_at": datetime.utcnow().isoformat(),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
             }
 
         except Exception as e:

@@ -6,7 +6,7 @@ Token Usage API - Token用量统计接口
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, Query
@@ -41,9 +41,9 @@ async def get_usage_summary(
     """
     # 如果未指定日期，使用days参数
     if start_date is None:
-        start_date = datetime.utcnow() - timedelta(days=days)
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
     if end_date is None:
-        end_date = datetime.utcnow()
+        end_date = datetime.now(timezone.utc)
 
     service = TokenUsageService(db)
     summary = await service.get_user_usage_summary(

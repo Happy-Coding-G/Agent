@@ -26,7 +26,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import UUID, uuid4
@@ -465,7 +465,7 @@ class CollaborationService(SpaceAwareService):
             client_info=client_info or {},
         )
         session.participants[user_id] = presence
-        session.last_activity = datetime.utcnow()
+        session.last_activity = datetime.now(timezone.utc)
 
         # 订阅消息频道
         await self._pubsub.subscribe(websocket, space_id, resource_type.value, resource_id)
@@ -478,7 +478,7 @@ class CollaborationService(SpaceAwareService):
                 "data": {
                     "user_id": user_id,
                     "user_name": presence.user_name,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             },
         )
@@ -528,7 +528,7 @@ class CollaborationService(SpaceAwareService):
                     "type": "user_left",
                     "data": {
                         "user_id": user_id,
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                     },
                 },
             )
@@ -593,7 +593,7 @@ class CollaborationService(SpaceAwareService):
         if session and user_id in session.participants:
             presence = session.participants[user_id]
             presence.status = status
-            presence.last_seen = datetime.utcnow()
+            presence.last_seen = datetime.now(timezone.utc)
 
             if cursor_position:
                 presence.cursor_position = cursor_position
@@ -607,7 +607,7 @@ class CollaborationService(SpaceAwareService):
                         "user_id": user_id,
                         "status": status.value,
                         "cursor_position": cursor_position,
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                     },
                 },
                 exclude_user_id=user_id,
@@ -838,7 +838,7 @@ class CollaborationService(SpaceAwareService):
 
     async def cleanup_inactive_sessions(self, max_idle_minutes: int = 30):
         """清理不活跃的会话"""
-        cutoff = datetime.utcnow() - timedelta(minutes=max_idle_minutes)
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_idle_minutes)
         to_remove = []
 
         for key, session in self._sessions.items():
@@ -865,7 +865,7 @@ class CollaborationService(SpaceAwareService):
         op_stats = {row[0].value: row[1] for row in result.all()}
 
         # 活跃用户统计
-        from_time = datetime.utcnow() - timedelta(days=7)
+        from_time = datetime.now(timezone.utc) - timedelta(days=7)
         result = await self.db.execute(
             select(
                 func.count(func.distinct(CollaborationOperations.user_id))
@@ -889,7 +889,7 @@ class CollaborationService(SpaceAwareService):
             "active_sessions": active_sessions,
             "total_sessions_today": len([
                 s for s in self._sessions.values()
-                if s.space_id == space_id and s.created_at.date() == datetime.utcnow().date()
+                if s.space_id == space_id and s.created_at.date() == datetime.now(timezone.utc).date()
             ]),
         }
 

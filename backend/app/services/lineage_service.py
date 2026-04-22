@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from uuid import UUID
@@ -793,7 +793,7 @@ class LineageService:
         Returns:
             清理的记录数
         """
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
         result = await self.db.execute(
             select(func.count(DataLineage.id)).where(
@@ -818,7 +818,7 @@ class LineageService:
         days: int = 30,
     ) -> Dict[str, Any]:
         """获取血缘统计信息"""
-        from_time = datetime.utcnow() - timedelta(days=days)
+        from_time = datetime.now(timezone.utc) - timedelta(days=days)
 
         # 基础查询
         base_query = select(DataLineage).where(DataLineage.created_at >= from_time)

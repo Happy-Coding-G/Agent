@@ -113,7 +113,7 @@ async def _update_agent_task(
             task.started_at = started_at
         if finished_at is not None:
             task.finished_at = finished_at
-        task.updated_at = datetime.utcnow()
+        task.updated_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(task)
 
