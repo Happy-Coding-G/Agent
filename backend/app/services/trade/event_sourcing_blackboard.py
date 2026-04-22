@@ -383,27 +383,8 @@ class StateProjector:
         return state
 
     async def _init_negotiation_state(self, session_id: str) -> NegotiationState:
-        """从数据库初始化协商状态"""
-        # 从 NegotiationSessions 表读取基础信息
-        from app.db.models import NegotiationSessions
-
-        stmt = select(NegotiationSessions).where(
-            NegotiationSessions.negotiation_id == session_id
-        )
-        result = await self.db.execute(stmt)
-        session = result.scalar_one_or_none()
-
-        if not session:
-            return NegotiationState(session_id=session_id)
-
-        return NegotiationState(
-            session_id=session_id,
-            buyer_id=session.buyer_user_id or 0,
-            seller_id=session.seller_user_id or 0,
-            buyer_ceiling=session.buyer_ceiling_price,
-            seller_floor=session.seller_floor_price,
-            status=session.status,
-        )
+        """初始化会话状态（NegotiationSessions 表已移除，返回默认状态）"""
+        return NegotiationState(session_id=session_id)
 
     def _state_from_snapshot(self, snapshot: BlackboardSnapshots) -> NegotiationState:
         """从快照恢复状态"""

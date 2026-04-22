@@ -47,7 +47,6 @@ logger = logging.getLogger(__name__)
 class SystemFeatureType(str, Enum):
     """系统级LLM功能类型"""
     # 交易监管
-    TRADE_NEGOTIATION_MONITOR = "trade_negotiation_monitor"  # 交易协商监管
     PRICE_REVIEW = "price_review"  # 价格审查
     ARBITRATION = "arbitration"  # 仲裁决策
 
@@ -85,10 +84,6 @@ class LLMTaskClassifier:
 
     # 系统任务关键词映射
     SYSTEM_TASK_PATTERNS: Dict[SystemFeatureType, List[str]] = {
-        SystemFeatureType.TRADE_NEGOTIATION_MONITOR: [
-            "交易", "协商", "谈判", "买卖", "议价", "出价", "报价",
-            "trade", "negotiation", "bid", "offer", "deal"
-        ],
         SystemFeatureType.PRICE_REVIEW: [
             "价格审查", "定价审核", "价格评估", "价格合理性",
             "price review", "price assessment", "pricing validation"
@@ -178,8 +173,8 @@ class LLMTaskClassifier:
 
         # 3. 根据上下文判断
         if context:
-            # 如果涉及交易、协商、审计等，使用系统LLM
-            if any(k in context for k in ["trade", "negotiation", "audit", "escrow"]):
+            # 如果涉及交易、审计等，使用系统LLM
+            if any(k in context for k in ["trade", "audit", "pricing"]):
                 return LLMTaskClassification(
                     is_system_task=True,
                     feature_type=SystemFeatureType.SYSTEM_AUDIT,
@@ -392,7 +387,6 @@ class SystemLLMClient:
     def _map_to_feature_type(self) -> FeatureType:
         """将SystemFeatureType映射到FeatureType用于用量记录"""
         mapping = {
-            SystemFeatureType.TRADE_NEGOTIATION_MONITOR: FeatureType.TRADE_NEGOTIATION,
             SystemFeatureType.PRICE_REVIEW: FeatureType.TRADE_PRICING,
             SystemFeatureType.ARBITRATION: FeatureType.REVIEW,
             SystemFeatureType.PROMPT_SAFETY_CHECK: FeatureType.REVIEW,

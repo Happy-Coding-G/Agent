@@ -142,7 +142,6 @@ def _get_feature_label(feature: FeatureType) -> str:
         FeatureType.CHAT_STREAM: "流式对话",
         FeatureType.ASSET_GENERATION: "资产生成",
         FeatureType.ASSET_ORGANIZE: "资产整理",
-        FeatureType.TRADE_NEGOTIATION: "交易协商",
         FeatureType.TRADE_PRICING: "交易定价",
         FeatureType.INGEST_PIPELINE: "文档摄入",
         FeatureType.GRAPH_CONSTRUCTION: "图谱构建",

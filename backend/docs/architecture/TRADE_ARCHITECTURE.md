@@ -1,182 +1,124 @@
-# Trade Multi-Agent Architecture
+# Trade Architecture
 
 ## 概述
 
-基于 LangGraph 的多 Agent 分布式协商架构，实现了真正的 Agent 间通信和状态流转。
+交易模块采用 **直接交易（Direct Trade）** 模式，所有交易统一走 listing -> purchase -> order -> wallet 路径。
+
+协商（bilateral negotiation）和拍卖（auction）机制已移除，以简化系统复杂度。
 
 ## 架构组件
 
-### 1. Agent Nodes
-
 ```
-┌─────────────────┐
-│  Orchestrator   │  <- 协调器，控制流程和路由
-│     Node        │
-└────────┬────────┘
-         │
-    ┌────┴────┐
-    ▼         ▼
-┌────────┐  ┌────────┐
-│ Seller │  │ Buyer  │  <- 买卖双方 Agent
-│ Agent  │  │ Agent  │     (通过消息传递通信)
-└────┬───┘  └───┬────┘
-     │          │
-     └────┬─────┘
-          ▼
-   ┌─────────────┐
-   │  Settlement │  <- 结算节点
-   │    Node     │
-   └─────────────┘
-```
-
-### 2. 状态流转
-
-```
-[Init] -> [Orchestrator] -> [Seller] --消息--> [Buyer] --消息--> [Orchestrator]
-                                    ↑                              │
-                                    └──────────────────────────────┘
-                                          (循环多轮协商)
-
-当达成协议:
-[Orchestrator] -> [Settlement] -> [End]
+User Request
+    |
+    v
+TradeWorkflow Agent (.md driven)
+    |
+    v
+TradeToolRegistry
+    |-- trade_normalize_goal    # 解析用户交易意图
+    |-- trade_select_mechanism  # 统一返回 direct（简化决策）
+    |-- trade_execute           # 执行交易动作
+    |-- create_listing          # 资产上架
+    |-- asset_manage            # 资产管理
+    |
+    v
+TradeService / TradeRepository
+    |-- create_listing          # 创建 TradeListings
+    |-- purchase                # 创建 TradeOrders
+    |-- get_wallet              # 查询 TradeWallets
+    |
+    v
+PostgreSQL (TradeListings, TradeOrders, TradeWallets, TradeHoldings)
 ```
 
-### 3. 消息传递机制
+## 执行流程
 
-Agent 之间通过 `AgentMessage` 进行通信：
-
-```python
-@dataclass
-class AgentMessage:
-    msg_id: str
-    msg_type: MessageType  # ANNOUNCE, BID, OFFER, COUNTER, ACCEPT, etc.
-    from_agent: str
-    to_agent: str
-    payload: Dict[str, Any]
-```
-
-消息队列存储在 `TradeAgentState.message_queue` 中，由 Orchestrator 负责路由。
-
-### 4. 两种市场机制
-
-#### 4.1 Auction (拍卖)
+### 1. 购买流程
 
 ```
-Seller Agent                    Buyer Agent(s)
-    │                               │
-    ├── [ANNOUNCE] 拍卖启动 ───────►│
-    │                               │
-    │◄──────────── [BID] 出价 ─────┤ (多轮)
-    │                               │
-    ├── [ACCEPT] 成交 ────────────►│
+用户: "我想购买 listing_123"
+  |
+  v
+trade_normalize_goal -> {intent: BUY_ASSET, listing_id: "listing_123"}
+  |
+  v
+trade_select_mechanism -> {mechanism_type: "direct", engine_type: "simple"}
+  |
+  v
+trade_execute(action="purchase", listing_id="listing_123", buyer=user)
+  |
+  v
+TradeService.purchase()
+  - 验证 listing 存在且状态为 active
+  - 检查买家余额
+  - 扣减买家钱包，增加卖家钱包
+  - 创建 TradeOrders 记录
+  - 更新 TradeListings 状态为 sold
+  |
+  v
+返回订单结果
 ```
 
-#### 4.2 Bilateral Negotiation (双边协商)
+### 2. 上架流程
 
 ```
-Seller Agent                    Buyer Agent
-    │                               │
-    │◄─────────── [OFFER] 报价 ────┤
-    │                               │
-    ├── [COUNTER] 反报价 ─────────►│ (循环)
-    │                               │
-    │◄─────────── [OFFER] 出价 ────┤
-    │                               │
-    ├── [ACCEPT] 接受 ────────────►│
+用户: "我想上架这份报告，定价 200 积分"
+  |
+  v
+trade_normalize_goal -> {intent: SELL_ASSET, asset_id: "asset_456", target_price: 200}
+  |
+  v
+asset_manage(action="get", asset_id="asset_456")  # 确认资产存在
+  |
+  v
+create_listing(asset_id="asset_456", price_credits=200, seller=user)
+  |
+  v
+TradeService.create_listing()
+  - 创建 TradeListings 记录
+  - 状态设为 active
+  |
+  v
+返回 listing_id
 ```
+
+## 审批策略
+
+高价值交易自动触发人工审批：
+
+- 目标价格 > 10,000
+- 预算上限 > 50,000
+- 首次交易
+- 用户手动模式（manual_step）
+
+审批由 `ApprovalPolicyService` 统一决策，Agent 不可绕过。
 
 ## 代码结构
 
 ```
-backend/app/agents/
-├── trade_graph.py              # LangGraph 状态图定义
-│   ├── SellerAgentNode         # 卖方 Agent 节点
-│   ├── BuyerAgentNode          # 买方 Agent 节点
-│   ├── ExchangeOrchestratorNode # 协调器节点
-│   ├── SettlementNode          # 结算节点
-│   └── create_trade_graph()    # 图构建器
-│
-└── subagents/
-    └── trade_agent.py          # TradeAgent 对外接口
-        └── self.graph_service  # TradeGraphService 实例
+backend/app/
+├── schemas/trade_goal.py              # TradeGoal, TradeConstraints, MechanismSelection
+├── services/trade/
+│   ├── trade_service.py               # 核心交易服务
+│   ├── trade_action_service.py        # 交易动作处理
+│   ├── unified_trade_service.py       # 统一入口（简化后仅委托 TradeService）
+│   ├── mechanism_selection_policy.py  # 机制选择（始终返回 direct）
+│   ├── approval_policy_service.py     # 审批策略
+│   └── decision_log_service.py        # 决策日志
+├── agents/subagents/docs/
+│   └── trade_workflow.md              # Trade Agent 定义（ReAct 模式）
+└── agents/tools/trade_tools.py        # 交易工具注册
 ```
 
-## 使用示例
+## 数据库模型
 
-### 创建拍卖
+| 表名 | 用途 |
+|------|------|
+| `trade_listings` | 上架记录 |
+| `trade_orders` | 订单记录 |
+| `trade_wallets` | 用户钱包 |
+| `trade_holdings` | 资产持有 |
+| `trade_transaction_logs` | 交易流水 |
 
-```python
-# API 调用
-trade_agent = TradeAgent(db, llm_client)
-
-# 启动多 Agent 协商
-result = await trade_agent.create_auction(
-    space_public_id="space_123",
-    asset_id="asset_456",
-    user=seller_user,
-    auction_type="english",
-    starting_price=100.0,
-)
-
-# 返回 negotiation_id 用于后续交互
-negotiation_id = result["negotiation_id"]
-```
-
-### 买方出价
-
-```python
-# 买方 Agent 接收出价指令，发送 BID 消息
-result = await trade_agent.place_auction_bid(
-    lot_id=negotiation_id,
-    user=buyer_user,
-    amount=150.0,
-)
-
-# 消息流转:
-# 1. API -> Buyer Agent
-# 2. Buyer Agent 创建 BID 消息
-# 3. Orchestrator 路由消息到 Seller Agent
-# 4. Seller Agent 评估出价
-# 5. 返回 ACCEPT/COUNTER
-```
-
-### 双边协商
-
-```python
-# 创建协商会话
-result = await trade_agent.create_bilateral_negotiation(
-    listing_id="listing_123",
-    buyer=buyer_user,
-    initial_offer=80.0,
-    max_rounds=10,
-)
-
-# 卖方响应
-result = await trade_agent.respond_to_negotiation_offer(
-    session_id=result["session_id"],
-    user=seller_user,
-    response="counter",  # accept/reject/counter
-    counter_price=90.0,
-)
-
-# 多轮循环直到达成协议或终止
-```
-
-## 与之前架构的区别
-
-| 维度 | 旧架构 (函数调用) | 新架构 (LangGraph) |
-|------|------------------|-------------------|
-| Agent 通信 | 直接方法调用 | 消息传递 |
-| 状态管理 | 内存字典 | LangGraph State |
-| 循环交互 | 手动控制 | 图状态机自动流转 |
-| 可观测性 | 有限 | 完整的状态历史 |
-| 人工干预 | 难以实现 | 内置 `human_in_the_loop` |
-| 持久化 | 内存 | 支持 Checkpoint |
-
-## 待办事项
-
-1. **数据库集成**: 将 negotiation_id 与 listing 关联存储
-2. **LLM 决策**: 在 Seller/Buyer Agent 中集成 LLM 进行复杂决策
-3. **并发控制**: 处理多个买方同时出价的情况
-4. **人工干预**: 实现 `human_in_the_loop` 机制
-5. **状态持久化**: 使用数据库存储 checkpoint 而非内存
+> 注：`negotiation_sessions`、`agent_message_queue`、`escrow_records` 等协商/托管相关表已移除。

@@ -99,7 +99,7 @@ class DecisionLogService:
                 "goal": goal_context,
                 "selected_mechanism": mechanism,
             },
-            alternatives_considered=["bilateral", "auction", "direct"],
+            alternatives_considered=["direct"],
         )
 
     async def log_price_acceptance(

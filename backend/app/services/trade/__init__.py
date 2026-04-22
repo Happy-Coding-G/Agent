@@ -1,21 +1,11 @@
 """
-Trade Services Package - Phase 2
+Trade Services Package
 
-数据权益交易服务完整实现
+数据权益交易服务（仅支持直接交易）
 """
 
-from app.services.trade.trade_negotiation_service import TradeNegotiationService
 from app.services.trade.trade_agent_service import TradeAgentService
 from app.services.trade.trade_service import TradeService
-from app.services.trade.negotiation_event_store import NegotiationEventStore
-from app.services.trade.event_sourcing_blackboard import (
-    StateProjector,
-    AuctionModerator,
-    RateLimiter,
-    TemporalGraphMapper,
-    NegotiationState,
-    AuctionState,
-)
 
 # Phase 1: 数据权益基础
 from app.services.trade.data_rights_events import (
@@ -64,18 +54,8 @@ __all__ = [
     # 核心服务
     "TradeService",
     "TradeAgentService",
-    "TradeNegotiationService",
     "UnifiedTradeService",
-    "NegotiationEventStore",
     "DataRightsService",
-
-    # 事件溯源组件
-    "StateProjector",
-    "AuctionModerator",
-    "RateLimiter",
-    "TemporalGraphMapper",
-    "NegotiationState",
-    "AuctionState",
 
     # 数据权益事件
     "DataAssetRegisterPayload",

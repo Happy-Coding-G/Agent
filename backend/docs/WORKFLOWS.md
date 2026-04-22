@@ -122,56 +122,44 @@ entry -> plan -> [conditional]
 
 ---
 
-## 3. 交易协商工作流
+## 3. 交易工作流
 
 ### 3.1 整体流程
 
 ```
 User Chat: "我要卖这份数据，底价 1000"
-    -> MainAgent -> trade_goal Tool
-    -> TradeAgent.run_goal
-    -> TradeGoal (intent=sell_asset, min_price=1000)
-    -> mechanism_selection_policy
-    -> 选择 mechanism (fixed_price / auction / bilateral / direct)
-    -> 创建/推进 NegotiationSession
-    -> SellerAgent / BuyerAgent 通过 AgentMessageQueue 异步协商
-    -> 达成后更新 TradeListing / TradeOrder / EscrowRecord
+   -> MainAgent -> trade_workflow SubAgent (AgentSession ReAct)
+   -> trade_normalize_goal
+   -> trade_select_mechanism -> {mechanism_type: "direct"}
+   -> trade_execute / create_listing
+   -> 更新 TradeListing / TradeOrder / TradeWallet
 ```
 
 ### 3.2 详细步骤
 
 1. **目标解析**
-   - `trade_goal` Tool 接收用户自然语言意图
+   - `trade_workflow` Agent 接收用户自然语言意图
    - 映射为 `TradeIntent`：`sell_asset`、`buy_asset`、`price_inquiry`、`market_analysis`
    - 构造 `TradeGoal` 对象，提取约束条件（底价、预算、资产ID等）
 
-2. **机制选择** (`select_mechanism`)
-   - 输入：`goal` + `constraints` + `MarketContext` + `RiskContext`
-   - 输出：最优协商机制
-     - `fixed_price`：一口价
-     - `auction`：拍卖
-     - `bilateral`：双边协商
+2. **机制选择** (`trade_select_mechanism`)
+   - 输入：`goal` + `constraints`
+   - 输出：统一返回 `direct`（直接交易）
+   - 系统已移除 auction、bilateral 等复杂机制
 
-3. **协商会话创建**
-   - 若不存在，创建 `NegotiationSessions` 记录
-   - 设置初始价格参数（`starting_price`、`reserve_price`、`seller_floor_price` 等）
-   - 创建 `EscrowRecord` 锁定买方资金
+3. **执行交易**
+   - **上架**：`create_listing(asset_id, price_credits, seller)` → 创建 `TradeListings`
+   - **购买**：`trade_execute(action="purchase", listing_id, buyer)` → 创建 `TradeOrders`
+   - **询价**：`trade_execute(action="inquiry", ...)` → 返回市场价格信息
 
-4. **Agent 间异步协商** (Blackboard 模式)
-   - `SellerAgent` 和 `BuyerAgent` 轮询 `AgentMessageQueue`
-   - 通过 `msg_type` 交换报价：`OFFER` -> `COUNTER` -> `ACCEPT` / `REJECT`
-   - 每次消息更新 `NegotiationSessions.shared_board`（完整上下文）
-   - `NegotiationHistorySummary` 定期生成摘要，控制上下文长度
-
-5. **事件溯源记录**
-   - 每个关键动作写入 `BlackboardEvents`（不可变事件流）
-   - 支持通过 `BlackboardSnapshots` 快速恢复协商状态
-
-6. **结算**
-   - 达成一致后，更新 `NegotiationSessions.status = "settled"`
-   - 释放 `EscrowRecord` 资金给卖方
+4. **结算**
+   - 直接扣减买方钱包，增加卖方钱包
    - 创建 `TradeOrders` 和 `TradeHoldings`
    - 记录 `TradeTransactionLog` 资金流水
+
+5. **审批门控**
+   - 高价值交易（>10,000）触发 `ApprovalPolicyService`
+   - 需要人工审批时，Agent 返回 `pending_approval` 状态
 
 ---
 
@@ -224,7 +212,7 @@ User Chat: "我要卖这份数据，底价 1000"
 
 ```
 用户请求: "审查这份文档"
-    -> MainAgent -> review_document Tool
+   -> MainAgent -> review_workflow SubAgent
     -> ReviewAgent.run(doc_id)
     -> 加载文档内容和元数据
     -> LLM 多维度审查
@@ -235,7 +223,7 @@ User Chat: "我要卖这份数据，底价 1000"
 ### 5.2 详细步骤
 
 1. **触发审查**
-   - `review_document` Tool 接收 `doc_id` 和 `review_type`
+   - `review_workflow` SubAgent 接收 `doc_id` 和 `review_type`
    - `review_type` 可选：`standard`（标准）、`strict`（严格）
 
 2. **加载文档**
@@ -266,7 +254,7 @@ User Chat: "我要卖这份数据，底价 1000"
 
 ```
 用户请求: "帮我整理这些资产"
-    -> MainAgent -> asset_organize Tool
+   -> MainAgent -> asset_organize_workflow SubAgent
     -> AssetOrganizeAgent.run(asset_ids)
     -> 加载资产特征
     -> 计算相似度并聚类
@@ -463,7 +451,7 @@ Agent 需要调用 LLM
 ### 12.2 审计日志记录
 
 ```
-敏感操作（登录、文件下载、交易、协商）
+敏感操作（登录、文件下载、交易）
     -> AuditLogService.log_action(
            user_id, action, resource_type, resource_id,
            previous_state, new_state, request_payload
@@ -475,7 +463,7 @@ Agent 需要调用 LLM
 ### 12.3 乐观锁并发控制
 
 ```
-交易扣款 / 协商状态更新
+交易扣款 / 订单状态更新
     -> SELECT ... WHERE version = current_version
     -> 执行业务逻辑
     -> UPDATE ... SET version = version + 1

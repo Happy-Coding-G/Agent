@@ -160,40 +160,6 @@ class ApprovalPolicyService:
         )
 
     @classmethod
-    def evaluate_mechanism_selection(
-        cls,
-        mechanism_type: str,
-        expected_participants: int,
-    ) -> ApprovalDecision:
-        """
-        评估机制选择是否需要审批
-
-        Args:
-            mechanism_type: 机制类型
-            expected_participants: 预期参与者数量
-
-        Returns:
-            ApprovalDecision
-        """
-        # 高并发拍卖需要审批
-        if mechanism_type == "auction" and expected_participants > 50:
-            return ApprovalDecision(
-                requires_approval=True,
-                trigger=ApprovalTrigger.HIGH_RISK_OPERATION,
-                reason=f"Large auction ({expected_participants} participants) requires approval",
-                policy_applied="large_auction",
-                auto_executable=False,
-            )
-
-        return ApprovalDecision(
-            requires_approval=False,
-            trigger=None,
-            reason="Mechanism selection approved",
-            policy_applied="mechanism_default",
-            auto_executable=True,
-        )
-
-    @classmethod
     def evaluate_settlement(
         cls,
         final_price: float,

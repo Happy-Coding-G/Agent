@@ -107,10 +107,10 @@ class TradeGoal(BaseModel):
         description="紧急程度"
     )
 
-    # 偏好
-    preferred_mechanism: Optional[Literal["bilateral", "auction", "auto"]] = Field(
+    # 偏好（当前仅支持 direct）
+    preferred_mechanism: Optional[Literal["direct", "auto"]] = Field(
         default="auto",
-        description="偏好的协商机制，auto 由 Agent 决定"
+        description="交易机制偏好（当前仅支持 direct）"
     )
     require_immediate_settlement: bool = Field(
         default=False,
@@ -162,18 +162,7 @@ class TradeConstraints(BaseModel):
         default=10,
         ge=1,
         le=50,
-        description="最大协商轮数"
-    )
-    min_participants: int = Field(
-        default=1,
-        ge=1,
-        description="最少参与者数量"
-    )
-    max_participants: int = Field(
-        default=100,
-        ge=1,
-        le=1000,
-        description="最多参与者数量"
+        description="最大交互轮数"
     )
 
     # 预算和数量
@@ -207,12 +196,6 @@ class TradeConstraints(BaseModel):
     )
 
     # 时间约束
-    max_negotiation_duration_minutes: int = Field(
-        default=1440,  # 24小时
-        ge=10,
-        le=10080,  # 7天
-        description="最大协商持续时间（分钟）"
-    )
     response_timeout_seconds: int = Field(
         default=300,  # 5分钟
         ge=30,

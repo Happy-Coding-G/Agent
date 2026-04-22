@@ -54,7 +54,7 @@ backend/app/
 │   ├── graph/
 │   │   └── graph_service.py
 │   ├── skills/                # Skill 后端实现
-│   ├── trade/                 # 交易、协商、定价、托管
+│   ├── trade/                 # 交易、定价
 │   ├── memory/                # 统一记忆服务
 │   └── ...
 ├── ai/
@@ -113,7 +113,7 @@ backend/app/
 - `/spaces/{id}/assets` — 资产列表/读取/生成
 
 **已收口至 Agent Chat 的能力**：
-- 交易买卖、协商
+- 交易买卖
 - 文档审查
 - 资产整理聚类
 - 图谱写操作
@@ -190,16 +190,14 @@ entry -> plan -> [conditional]
 | `space_tools` | 空间列表、创建、删除、切换 |
 | `markdown_tools` | Markdown 文档列表、读取 |
 | `graph_tools` | 知识图谱获取、节点/边更新 |
-| `asset_tools` | 资产列表、获取、生成、整理聚类 |
-| `qa_tools` | RAG 问答（QAAgent 代理） |
+| `asset_tools` | 资产列表、获取、生成 |
 | `ingest_tools` | 文档摄入（通过上传 API 触发） |
-| `review_tools` | 文档审查 |
-| `trade_tools` | 交易目标执行（sell/buy/yield） |
+| `trade_tools` | 原子交易操作（创建挂单） |
 | `memory_tools` | 会话、消息、偏好、长期记忆管理 |
 | `user_config_tools` | 用户 LLM 配置、Agent 配置 |
 | `token_usage_tools` | Token 用量查询 |
 
-所有 Tool 内部直接调用 `services/` 层，**不走 HTTP**。
+所有 Tool 只承载原子能力并直接调用 `services/` 层，复杂工作流统一通过 SubAgent 执行，**不走 HTTP**。
 
 ### 5.3 Skills — Markdown 驱动的工作流
 
@@ -215,7 +213,7 @@ Phase 7 重构后，Skills 的定义从 Python 代码迁移到了 `agents/skills
 - `lineage_impact` — 血缘影响分析
 - `market_overview` — 市场概览
 - `market_trend` — 市场趋势
-- `privacy_protocol` — 隐私协议协商
+- `privacy_protocol` — 隐私协议
 - `audit_report` — 审计报告
 
 ### 5.4 SubAgents — 复杂工作流
@@ -224,7 +222,7 @@ Phase 7 重构后，Skills 的定义从 Python 代码迁移到了 `agents/skills
 - `qa_research` — RAG 问答（保留流式透传特殊通道）
 - `review_workflow` — 文档审查
 - `asset_organize_workflow` — 资产整理
-- `trade_workflow` — 交易协商
+- `trade_workflow` — 交易
 - `dynamic_workflow` — 动态生成复杂任务模板
 
 ## 6. 关键数据流
@@ -258,18 +256,18 @@ Frontend ChatTab
     -> SSE 事件流回前端 (status/token/result/[DONE])
 ```
 
-### 6.3 交易协商流程
+### 6.3 交易流程
 
 ```
 User Chat: "我要卖这份数据，底价 1000"
-    -> MainAgent -> trade_goal Tool
-    -> TradeAgent.run_goal
+    -> MainAgent -> trade_workflow SubAgent
+    -> TradeAgent.run
     -> TradeGoal (intent=sell_asset, min_price=1000)
     -> mechanism_selection_policy
-    -> 选择 mechanism (fixed_price / auction / bilateral / direct)
-    -> 创建/推进 NegotiationSession
-    -> SellerAgent / BuyerAgent 通过 AgentMessageQueue 异步协商
-    -> 达成后更新 TradeListing / TradeOrder / EscrowRecord
+    -> 选择 mechanism (direct)
+    -> 创建 Listing 或执行 Purchase
+    -> TradeService 直接执行
+    -> 更新 TradeListing / TradeOrder / TradeWallet
 ```
 
 ## 7. 安全配置
@@ -277,8 +275,8 @@ User Chat: "我要卖这份数据，底价 1000"
 - **认证**：JWT Bearer Token，前端通过 localStorage 持久化
 - **空间隔离**：所有 Service 通过 `SpaceAwareService` 强制校验用户-空间权限
 - **Agent 权限边界**：`CAPABILITY_ROUTING_SYSTEM_PROMPT` 明确告知 LLM 不得越权访问其他用户/空间数据
-- **乐观锁**：交易钱包（`TradeWallets.version`）、协商会话（`NegotiationSessions.version`）使用乐观锁防止并发竞争
-- **资金托管**：`EscrowRecord` 在协商期间锁定买方资金，超时自动退还
+- **乐观锁**：交易钱包（`TradeWallets.version`）、订单记录使用乐观锁防止并发竞争
+- **直接结算**：买方付款直接转入卖方钱包，无托管环节
 
 ## 8. 扩展指南
 

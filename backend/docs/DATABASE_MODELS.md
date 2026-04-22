@@ -387,67 +387,6 @@
 
 ---
 
-## 8. 协商与多 Agent 通信模块
-
-### 8.1 `negotiation_sessions` — 协商会话
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `id` | `BigInteger PK` | 自增主键 |
-| `negotiation_id` | `String(32) UQ` | 协商唯一标识 |
-| `seller_user_id` / `buyer_user_id` | `BigInteger FK` | 参与双方 |
-| `listing_id` / `asset_id` | `String(32)` | 关联挂牌/资产 |
-| `mechanism_type` | `Enum` | 机制：`fixed_price` / `bilateral` / `auction` / `blackboard` |
-| `max_rounds` | `Integer` | 最大协商轮数 |
-| `status` | `Enum` | 状态：`pending` / `active` / `paused` / `agreed` / `settled` / `cancelled` / `terminated` / `disputed` |
-| `current_round` | `Integer` | 当前轮次 |
-| `current_turn` | `String(16)` | 当前轮到：`seller` / `buyer` |
-| `starting_price` / `reserve_price` / `current_price` / `agreed_price` | `BigInteger` | 各阶段价格（分） |
-| `seller_floor_price` / `buyer_ceiling_price` | `BigInteger` | 双方底线价格（Blackboard 模式） |
-| `seller_target_price` / `buyer_target_price` | `BigInteger` | 双方目标价格 |
-| `winner_user_id` | `BigInteger FK` | 胜出者（拍卖） |
-| `shared_board` | `JSONB` | 共享黑板：完整协商上下文 |
-| `escrow_id` | `String(32) FK` | 关联托管记录 |
-| `settlement_result` | `JSONB` | 结算结果 |
-| `settlement_at` | `DateTime` | 结算时间 |
-| `expires_at` / `last_activity_at` | `DateTime` | 过期/最后活跃时间 |
-| `version` | `Integer` | 乐观锁版本号 |
-| `engine_type` / `selection_reason` / `autonomy_mode` / `approval_status` / `initiating_task_id` / `expected_participants` / `requires_full_audit` / `last_projection_version` | 多种类型 | Agent-First 扩展字段：引擎类型、选择原因、自治模式、审批状态等 |
-
-### 8.2 `agent_message_queue` — Agent 间消息队列
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `id` | `BigInteger PK` | 自增主键 |
-| `message_id` | `String(32) UQ` | 消息唯一标识 |
-| `negotiation_id` | `String(32) FK` | 关联协商会话 |
-| `from_agent_user_id` / `to_agent_user_id` | `BigInteger FK` | 发送/接收方 Agent |
-| `msg_type` | `Enum` | 消息类型：`ANNOUNCE` / `BID` / `OFFER` / `COUNTER` / `ACCEPT` / `REJECT` / `QUERY` / `RESPONSE` / `COMMIT` / `SETTLE` |
-| `payload` | `JSONB` | 消息载荷 |
-| `status` | `Enum` | 状态：`pending` / `delivered` / `processed` / `failed` |
-| `processed_at` / `processed_by` | `DateTime` / `String(64)` | 处理时间/处理者实例 |
-| `priority` / `retry_count` / `error` | `Integer` / `Text` | 优先级/重试/错误 |
-| `created_at` / `updated_at` | `DateTime` | 时间戳 |
-
-### 8.3 `negotiation_history_summaries` — 协商历史摘要
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `id` | `BigInteger PK` | 自增主键 |
-| `summary_id` | `String(32) UQ` | 摘要标识 |
-| `negotiation_id` | `String(32) FK` | 关联协商 |
-| `layer` | `Integer` | 摘要层级（1=原始，2=第一层摘要） |
-| `round_start` / `round_end` | `Integer` | 覆盖轮次范围 |
-| `summary` | `Text` | LLM 生成的摘要文本 |
-| `price_trajectory` | `JSONB` | 价格轨迹分析 |
-| `key_events` | `JSONB` | 关键事件列表 |
-| `sentiment_summary` | `JSONB` | 情绪摘要 |
-| `total_rounds` | `Integer` | 总轮数 |
-| `concession_magnitude` | `Float` | 让步幅度 |
-| `created_at` | `DateTime` | 创建时间 |
-
----
-
 ## 9. 记忆管理模块
 
 ### 9.1 `conversation_sessions` — 对话会话
@@ -590,11 +529,11 @@
 | `id` | `BigInteger PK` | 自增主键 |
 | `event_id` | `String(32) UQ` | 事件唯一标识 |
 | `session_id` | `String(32) Index` | 关联会话 |
-| `session_type` | `String(16)` | 会话类型：`negotiation` / `auction` |
+| `session_type` | `String(16)` | 会话类型：`data_rights` / `audit` |
 | `sequence_number` | `Integer` | 全局递增序列号（乐观锁） |
-| `event_type` | `Enum` | 事件类型：`BID` / `OFFER` / `COUNTER` / `ACCEPT` / `REJECT` / `WITHDRAW` / `CEILING_SET` / `FLOOR_SET` / `AGREEMENT` / `TIMEOUT` |
+| `event_type` | `Enum` | 事件类型：数据权益相关事件 |
 | `agent_id` | `BigInteger` | 发起者 user_id |
-| `agent_role` | `String(16)` | 角色：`buyer` / `seller` / `bidder` |
+| `agent_role` | `String(16)` | 角色：`owner` / `buyer` / `auditor` |
 | `payload` | `JSONB` | 事件载荷 |
 | `event_timestamp` | `DateTime` | 业务时间戳 |
 | `vector_clock` | `JSONB` | 逻辑时钟（因果排序） |
@@ -669,7 +608,7 @@
 |------|------|------|
 | `id` | `Integer PK` | 自增主键 |
 | `transaction_id` | `String(64) UQ Index` | 交易标识 |
-| `negotiation_id` | `String(64) FK` | 关联协商 |
+| `negotiation_id` | `String(64)` | 遗留字段（协商表已移除） |
 | `data_asset_id` | `String(64) FK` | 关联资产 |
 | `owner_id` / `buyer_id` | `Integer FK` | 交易双方 |
 | `rights_types` | `JSONB` | 权益类型列表 |
@@ -750,8 +689,6 @@
 | `temperature` | `Float` | 采样温度（默认 0.2） |
 | `max_tokens` | `Integer` | 最大 Token 数（默认 2048） |
 | `system_prompt` | `Text` | 自定义系统提示词 |
-| `trade_auto_negotiate` | `Boolean` | 是否自动协商 |
-| `trade_max_rounds` | `Integer` | 最大协商轮数 |
 | `trade_min_profit_margin` | `Float` | 卖方最小利润率 |
 | `trade_max_budget_ratio` | `Float` | 买方最大预算比例 |
 | `is_active` / `is_default` | `Boolean` | 状态/默认标志 |
@@ -791,45 +728,6 @@
 
 ---
 
-## 14. 资金托管模块
-
-### 14.1 `escrow_records` — 托管记录
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `id` | `Integer PK` | 自增主键 |
-| `escrow_id` | `String(32) UQ` | 托管标识 |
-| `negotiation_id` | `String(64) FK` | 关联协商 |
-| `listing_id` | `String(32)` | 关联挂牌 |
-| `buyer_id` / `seller_id` | `Integer FK` | 买卖双方 |
-| `amount_cents` | `BigInteger` | 托管金额（分） |
-| `platform_fee_cents` | `BigInteger` | 平台手续费 |
-| `seller_income_cents` | `BigInteger` | 卖方实际收入 |
-| `status` | `Enum` | 状态：`locked` / `released` / `refunded` / `disputed` / `expired` |
-| `locked_at` / `expires_at` / `released_at` / `refunded_at` | `DateTime` | 各阶段时间 |
-| `released_by` | `String(20)` | 释放操作者：`system` / `buyer` / `seller` / `arbitrator` |
-| `refund_reason` | `Text` | 退款原因 |
-| `version` | `Integer` | 乐观锁版本 |
-| `metadata_json` | `JSONB` | 扩展元数据 |
-
-### 14.2 `escrow_transaction_logs` — 托管资金流水
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `id` | `Integer PK` | 自增主键 |
-| `log_id` | `String(32) UQ` | 流水号 |
-| `escrow_id` | `String(32) FK` | 关联托管记录 |
-| `user_id` | `Integer FK` | 涉及用户 |
-| `transaction_type` | `String(20)` | 类型：`lock` / `release` / `refund` / `fee` |
-| `amount_cents` | `BigInteger` | 变动金额（正入负出） |
-| `wallet_balance_before` / `wallet_balance_after` | `BigInteger` | 钱包余额快照 |
-| `escrow_balance_before` / `escrow_balance_after` | `BigInteger` | 托管余额快照 |
-| `description` | `Text` | 描述 |
-| `metadata_json` | `JSONB` | 扩展元数据 |
-| `created_at` | `DateTime` | 记录时间 |
-
----
-
 ## 15. 协作与同步模块
 
 ### 15.1 `collaboration_operations` — 协作操作记录
@@ -866,17 +764,12 @@
 | `listing_status` | `draft`, `active`, `paused`, `sold_out`, `delisted`, `suspended` |
 | `order_status` | `pending`, `completed`, `cancelled`, `refunded`, `disputed` |
 | `yield_strategy` | `conservative`, `balanced`, `aggressive` |
-| `negotiation_status` | `pending`, `active`, `paused`, `agreed`, `settled`, `cancelled`, `terminated`, `disputed` |
-| `mechanism_type` | `fixed_price`, `bilateral`, `auction`, `blackboard` |
-| `message_type` | `ANNOUNCE`, `BID`, `OFFER`, `COUNTER`, `ACCEPT`, `REJECT`, `QUERY`, `RESPONSE`, `COMMIT`, `SETTLE` |
-| `message_status` | `pending`, `delivered`, `processed`, `failed` |
-| `blackboard_event_type` | `BID`, `OFFER`, `COUNTER`, `ACCEPT`, `REJECT`, `WITHDRAW`, `CEILING_SET`, `FLOOR_SET`, `AGREEMENT`, `TIMEOUT` |
+| `blackboard_event_type` | `DATA_ASSET_REGISTER`, `DATA_RIGHTS_NEGOTIATION_INIT`, `DATA_RIGHTS_GRANT`, `USAGE_SCOPE_DEFINE`, `COMPUTATION_AGREEMENT`, `DATA_ACCESS_AUDIT`, `POLICY_VIOLATION`, `RIGHTS_REVOKE` |
 | `DataSensitivityLevel` | `low`, `medium`, `high`, `critical` |
 | `ComputationMethod` | `federated_learning`, `mpc`, `tee`, `differential_privacy`, `raw_data` |
 | `DataRightsStatus` | `pending`, `active`, `granted`, `expired`, `revoked`, `violated` |
 | `LLMProvider` | `deepseek`, `openai`, `qwen`, `custom` |
-| `FeatureType` | `chat`, `chat_stream`, `asset_generation`, `asset_organize`, `trade_negotiation`, `trade_pricing`, `ingest_pipeline`, `graph_construction`, `review`, `file_query`, `embedding`, `other` |
-| `EscrowStatus` | `locked`, `released`, `refunded`, `disputed`, `expired` |
+| `FeatureType` | `chat`, `chat_stream`, `asset_generation`, `asset_organize`, `trade_pricing`, `ingest_pipeline`, `graph_construction`, `review`, `file_query`, `embedding`, `other` |
 | `OperationType` (Python) | `create`, `edit`, `delete`, `move` |
 | `SpaceRole` (Python) | `owner`, `admin`, `editor`, `viewer` |
 | `DataLineageType` (Python) | `upload`, `api`, `agent_generation`, `import`, `transform`, `derived` |

@@ -31,7 +31,7 @@
 │  │  │                           ↓                                      │ │   │
 │  │  │  意图分析: { intent: "asset_search_buy", confidence: 0.92 }    │ │   │
 │  │  │                           ↓                                      │ │   │
-│  │  │  工作流选择: asset_search_buy (搜索→分析→协商→结算)             │ │   │
+│  │  │  工作流选择: asset_search_buy (搜索→分析→购买→结算)             │ │   │
 │  │  └─────────────────────────────────────────────────────────────────┘ │   │
 │  └───────────────────────────────────────────────────────────────────────┘   │
 │                                      │                                          │
@@ -184,7 +184,7 @@ class WorkflowExecution:
        │
        ▼
 ┌─────────────┐
-│   Trade     │  1. 发起协商
+│   Trade     │  1. 发起交易
 │   Agent     │  2. 多轮议价
 └──────┬──────┘  3. 达成一致
        │
@@ -261,7 +261,7 @@ class WorkflowExecution:
 | Review | AssetOrganize | doc_id, review_result (approved/rejected) |
 | AssetOrganize | Trade | asset_ids, cluster_info, price_suggestion |
 | QAAgent | AssetOrganize | related_asset_ids |
-| Trade | Settlement | negotiation_id, agreed_price |
+| Trade | Settlement | order_id, final_price |
 
 ## 5. 智能意图路由
 

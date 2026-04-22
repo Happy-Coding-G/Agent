@@ -28,7 +28,7 @@ class TestEvaluateTransaction:
     def test_always_approval_policy(self):
         """ALWAYS 策略总是需要审批"""
         goal = TradeGoal(
-            intent=TradeIntent.BUY,
+            intent=TradeIntent.BUY_ASSET,
             listing_id="listing_123",
             target_price=100.0,
             asset_type=AssetType.GENERAL,
@@ -46,7 +46,7 @@ class TestEvaluateTransaction:
     def test_none_approval_policy(self):
         """NONE 策略从不审批"""
         goal = TradeGoal(
-            intent=TradeIntent.BUY,
+            intent=TradeIntent.BUY_ASSET,
             listing_id="listing_123",
             target_price=999999.0,
             asset_type=AssetType.GENERAL,
@@ -63,7 +63,7 @@ class TestEvaluateTransaction:
     def test_first_transaction_policy(self):
         """首次交易触发审批"""
         goal = TradeGoal(
-            intent=TradeIntent.BUY,
+            intent=TradeIntent.BUY_ASSET,
             listing_id="listing_123",
             target_price=100.0,
             asset_type=AssetType.GENERAL,
@@ -82,7 +82,7 @@ class TestEvaluateTransaction:
     def test_first_transaction_policy_not_first(self):
         """非首次交易不触发审批"""
         goal = TradeGoal(
-            intent=TradeIntent.BUY,
+            intent=TradeIntent.BUY_ASSET,
             listing_id="listing_123",
             target_price=100.0,
             asset_type=AssetType.GENERAL,
@@ -100,7 +100,7 @@ class TestEvaluateTransaction:
     def test_price_threshold_exceeded(self):
         """超出价格阈值触发审批"""
         goal = TradeGoal(
-            intent=TradeIntent.BUY,
+            intent=TradeIntent.BUY_ASSET,
             listing_id="listing_123",
             target_price=1000.0,
             asset_type=AssetType.GENERAL,
@@ -119,7 +119,7 @@ class TestEvaluateTransaction:
     def test_price_threshold_not_exceeded(self):
         """未超出价格阈值不触发审批"""
         goal = TradeGoal(
-            intent=TradeIntent.BUY,
+            intent=TradeIntent.BUY_ASSET,
             listing_id="listing_123",
             target_price=400.0,
             asset_type=AssetType.GENERAL,
@@ -136,7 +136,7 @@ class TestEvaluateTransaction:
     def test_high_value_asset_triggers_approval(self):
         """高价值资产触发审批"""
         goal = TradeGoal(
-            intent=TradeIntent.BUY,
+            intent=TradeIntent.BUY_ASSET,
             listing_id="listing_123",
             target_price=15000.0,  # 超过 HIGH_VALUE_THRESHOLD (10000)
             asset_type=AssetType.GENERAL,
@@ -151,7 +151,7 @@ class TestEvaluateTransaction:
     def test_high_budget_triggers_approval(self):
         """高预算触发审批"""
         goal = TradeGoal(
-            intent=TradeIntent.BUY,
+            intent=TradeIntent.BUY_ASSET,
             listing_id="listing_123",
             target_price=100.0,
             asset_type=AssetType.GENERAL,
@@ -168,7 +168,7 @@ class TestEvaluateTransaction:
     def test_manual_step_autonomy_mode(self):
         """手动步骤自治模式触发审批"""
         goal = TradeGoal(
-            intent=TradeIntent.BUY,
+            intent=TradeIntent.BUY_ASSET,
             listing_id="listing_123",
             target_price=100.0,
             asset_type=AssetType.GENERAL,
@@ -183,29 +183,6 @@ class TestEvaluateTransaction:
         assert decision.trigger == ApprovalTrigger.MANUAL_MODE
 
 
-class TestEvaluateMechanismSelection:
-    """测试机制选择审批"""
-
-    def test_large_auction_requires_approval(self):
-        """大型拍卖需要审批"""
-        decision = ApprovalPolicyService.evaluate_mechanism_selection(
-            mechanism_type="auction",
-            expected_participants=100,  # 超过50
-        )
-
-        assert decision.requires_approval is True
-        assert decision.trigger == ApprovalTrigger.HIGH_RISK_OPERATION
-        assert "Large auction" in decision.reason
-
-    def test_small_auction_no_approval(self):
-        """小型拍卖不需要审批"""
-        decision = ApprovalPolicyService.evaluate_mechanism_selection(
-            mechanism_type="auction",
-            expected_participants=10,
-        )
-
-        assert decision.requires_approval is False
-        assert decision.auto_executable is True
 
 
 class TestEvaluateSettlement:
@@ -214,7 +191,7 @@ class TestEvaluateSettlement:
     def test_settlement_exceeds_budget(self):
         """结算超出预算触发审批"""
         goal = TradeGoal(
-            intent=TradeIntent.BUY,
+            intent=TradeIntent.BUY_ASSET,
             listing_id="listing_123",
             target_price=100.0,
             asset_type=AssetType.GENERAL,
@@ -235,9 +212,9 @@ class TestEvaluateSettlement:
     def test_settlement_within_budget(self):
         """结算在预算内不触发审批"""
         goal = TradeGoal(
-            intent=TradeIntent.BUY,
+            intent=TradeIntent.BUY_ASSET,
             listing_id="listing_123",
-            target_price=100.0,
+            target_price=400.0,
             asset_type=AssetType.GENERAL,
         )
         constraints = TradeConstraints(
@@ -255,7 +232,7 @@ class TestEvaluateSettlement:
     def test_settlement_exceeds_target_by_20_percent(self):
         """结算超出目标价格20%触发审批"""
         goal = TradeGoal(
-            intent=TradeIntent.BUY,
+            intent=TradeIntent.BUY_ASSET,
             listing_id="listing_123",
             target_price=100.0,
             asset_type=AssetType.GENERAL,
@@ -278,7 +255,7 @@ class TestHelperFunctions:
     def test_requires_approval_helper(self):
         """测试 requires_approval 便捷函数"""
         goal = TradeGoal(
-            intent=TradeIntent.BUY,
+            intent=TradeIntent.BUY_ASSET,
             listing_id="listing_123",
             target_price=100.0,
             asset_type=AssetType.GENERAL,
@@ -294,7 +271,7 @@ class TestHelperFunctions:
     def test_get_approval_reason_helper(self):
         """测试 get_approval_reason 便捷函数"""
         goal = TradeGoal(
-            intent=TradeIntent.BUY,
+            intent=TradeIntent.BUY_ASSET,
             listing_id="listing_123",
             target_price=100.0,
             asset_type=AssetType.GENERAL,

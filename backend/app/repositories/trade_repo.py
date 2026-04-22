@@ -15,7 +15,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.db.models import (
     TradeListings, TradeOrders, TradeWallets, TradeHoldings,
-    TradeYieldRuns, TradeTransactionLog, AgentMessageQueue,
+    TradeYieldRuns, TradeTransactionLog,
     DataRightsTransactions, ComputationMethod, DataRightsStatus,
 )
 from app.core.errors import ServiceError
@@ -727,25 +727,3 @@ class TradeRepository:
             "total_yield_earned": cents_to_credits(total_yield),
         }
 
-    # ==========================================================================
-    # Message Queue Operations - with SKIP LOCKED for multi-worker safety
-    # ==========================================================================
-
-    async def get_pending_messages_with_lock(
-        self,
-        limit: int = 10,
-    ) -> List[AgentMessageQueue]:
-        """获取待处理消息并使用 SKIP LOCKED 防止多 worker 竞争"""
-        stmt = (
-            select(AgentMessageQueue)
-            .where(AgentMessageQueue.status == "pending")
-            .order_by(
-                AgentMessageQueue.priority.desc(),
-                AgentMessageQueue.created_at.asc(),
-            )
-            .limit(limit)
-            .with_for_update(skip_locked=True)
-        )
-
-        result = await self._db.execute(stmt)
-        return list(result.scalars().all())

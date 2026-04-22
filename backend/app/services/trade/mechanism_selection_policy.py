@@ -30,7 +30,6 @@ from app.schemas.trade_goal import (
     MechanismSelection,
     TradeIntent,
     AutonomyMode,
-    NegotiationMechanism,
     EngineType,
 )
 
@@ -38,7 +37,6 @@ __all__ = [
     "MechanismSelectionPolicy",
     "select_mechanism",
     "MechanismSelection",
-    "NegotiationMechanism",
     "EngineType",
     "MarketContext",
     "RiskContext",
