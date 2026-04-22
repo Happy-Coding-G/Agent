@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -97,8 +97,8 @@ class AuditSkill:
         完整的交易审计报告，包含访问记录、风险分析、违规情况。
         """
         try:
-            start_date = datetime.utcnow() - timedelta(days=days)
-            end_date = datetime.utcnow()
+            start_date = datetime.now(timezone.utc) - timedelta(days=days)
+            end_date = datetime.now(timezone.utc)
 
             report = await self.audit_service.generate_audit_report(
                 transaction_id=transaction_id,
@@ -131,7 +131,7 @@ class AuditSkill:
                 "access_trend": report.get("access_trend", []),
                 "violations": report.get("violations", []),
                 "recommendations": recommendations,
-                "generated_at": datetime.utcnow().isoformat(),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
             }
 
         except Exception as e:
@@ -150,7 +150,7 @@ class AuditSkill:
         """
         try:
             # 查询最近30天的访问统计
-            since = datetime.utcnow() - timedelta(days=30)
+            since = datetime.now(timezone.utc) - timedelta(days=30)
 
             # 这里简化实现，实际应该从服务获取
             report = await self.generate_audit_report(transaction_id, days=30)
@@ -278,7 +278,7 @@ class AuditSkill:
         """
         try:
             # 获取两个周期的风险评分
-            end1 = datetime.utcnow() - timedelta(days=period2_days)
+            end1 = datetime.now(timezone.utc) - timedelta(days=period2_days)
             start1 = end1 - timedelta(days=period1_days)
 
             # 这里简化实现，实际应该查询特定时间段
@@ -461,7 +461,7 @@ class AuditSkill:
             return {
                 "success": True,
                 "transaction_id": transaction_id,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "metrics": {
                     "total_access": summary.get("total_access", 0),
                     "avg_risk_score": risk.get("risk_score", 0),

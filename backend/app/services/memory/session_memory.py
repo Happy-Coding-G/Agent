@@ -12,7 +12,7 @@ import json
 import logging
 import pickle
 import weakref
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import redis.asyncio as redis
@@ -126,7 +126,7 @@ class SessionMemory:
         message = {
             "role": role,
             "content": content,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "metadata": metadata or {},
         }
 
@@ -230,7 +230,7 @@ class SessionMemory:
 
         entry = {
             "value": pickle.dumps(value),
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
         await redis_client.hset(wm_key, key, pickle.dumps(entry))
@@ -332,7 +332,7 @@ class SessionMemory:
         message = {
             "role": role,
             "content": content,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "metadata": metadata or {},
         }
         await redis_client.lpush(key, json.dumps(message, ensure_ascii=False))

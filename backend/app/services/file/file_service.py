@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -15,6 +17,58 @@ from app.repositories.upload_repo import UploadRepository
 from app.services.base import SpaceAwareService
 from app.utils.MinIO import minio_service
 from app.services.ingest_service import IngestService
+
+# ---------------------------------------------------------------------------
+# Upload validation constants
+# ---------------------------------------------------------------------------
+# Maximum file size: 500 MB
+_MAX_UPLOAD_SIZE_BYTES = 500 * 1024 * 1024
+
+# Allowed file extensions (lowercase). Extend as needed.
+_ALLOWED_EXTENSIONS = {
+    # Documents
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".odt", ".ods", ".odp", ".rtf",
+    # Text / Markup
+    ".txt", ".md", ".markdown", ".rst", ".csv", ".tsv", ".json",
+    ".xml", ".html", ".htm", ".yaml", ".yml", ".toml",
+    # Images
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".tiff",
+    # Archives (for bulk imports — still scanned by ingest pipeline)
+    ".zip",
+}
+
+# Regex for a safe filename: no path separators, no hidden-file dots at start,
+# no control characters.
+_SAFE_FILENAME_RE = re.compile(r'^[^\x00-\x1f/\\:*?"<>|]+$')
+
+
+def _validate_filename(filename: str) -> str:
+    """
+    Sanitise and validate an upload filename.
+    Returns the normalised basename or raises ServiceError.
+    """
+    if not filename:
+        raise ServiceError(400, "Filename must not be empty")
+
+    # Strip any directory component supplied by the client
+    basename = os.path.basename(filename)
+
+    if not basename or basename in (".", ".."):
+        raise ServiceError(400, "Invalid filename")
+
+    if not _SAFE_FILENAME_RE.match(basename):
+        raise ServiceError(400, "Filename contains invalid characters")
+
+    _, ext = os.path.splitext(basename.lower())
+    if ext not in _ALLOWED_EXTENSIONS:
+        raise ServiceError(
+            400,
+            f"File type '{ext}' is not allowed. "
+            f"Allowed types: {', '.join(sorted(_ALLOWED_EXTENSIONS))}",
+        )
+
+    return basename
 
 
 class SpaceFileService(SpaceAwareService):
@@ -99,6 +153,18 @@ class SpaceFileService(SpaceAwareService):
         size_bytes: int,
         user: Users,
     ):
+        # --- Input validation ---
+        safe_name = _validate_filename(filename)
+
+        if size_bytes <= 0:
+            raise ServiceError(400, "size_bytes must be a positive integer")
+        if size_bytes > _MAX_UPLOAD_SIZE_BYTES:
+            raise ServiceError(
+                400,
+                f"File size {size_bytes} bytes exceeds the maximum allowed "
+                f"{_MAX_UPLOAD_SIZE_BYTES} bytes (500 MB)",
+            )
+
         async with self.db.begin():
             space = await self.spaces.get_by_public_id_for_owner(
                 space_public_id, user.id
@@ -118,13 +184,15 @@ class SpaceFileService(SpaceAwareService):
                 raise ServiceError(404, "Folder not found in current space")
 
             upload_id = uuid.uuid4().hex[:32]
-            object_key = f"s/{space.public_id}/{uuid.uuid4().hex[:16]}/{filename}"
+            # Use the sanitised basename so the object key never contains
+            # path-traversal components supplied by the client.
+            object_key = f"s/{space.public_id}/{uuid.uuid4().hex[:16]}/{safe_name}"
 
             await self.uploads.create(
                 public_id=upload_id,
                 space_id=space_id,
                 folder_id=folder.id,
-                filename=filename,
+                filename=safe_name,
                 size_bytes=size_bytes,
                 status="init",
                 created_by=user.id,

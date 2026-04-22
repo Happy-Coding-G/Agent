@@ -11,7 +11,7 @@ Token Usage Service - Token用量统计服务
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List, Any, Tuple
 from decimal import Decimal
 
@@ -176,8 +176,8 @@ class TokenUsageService:
         Returns:
             用量汇总统计
         """
-        start_date = start_date or datetime.utcnow() - timedelta(days=30)
-        end_date = end_date or datetime.utcnow()
+        start_date = start_date or datetime.now(timezone.utc) - timedelta(days=30)
+        end_date = end_date or datetime.now(timezone.utc)
 
         # 基础统计
         result = await self.db.execute(
@@ -278,7 +278,7 @@ class TokenUsageService:
         Returns:
             每日用量列表
         """
-        start_date = datetime.utcnow() - timedelta(days=days)
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
 
         result = await self.db.execute(
             select(

@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, SecretStr
@@ -18,6 +19,8 @@ from app.api.deps.auth import get_current_user, get_db
 from app.db.models import Users
 from app.services.user_agent_service import UserAgentService
 from app.core.errors import ServiceError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/user/agent", tags=["user-agent"])
 
@@ -154,12 +157,13 @@ async def update_llm_config(
         raise HTTPException(
             status_code=e.status_code,
             detail={
-                "message": str(e),
+                "message": e.detail,
                 "details": e.details if hasattr(e, 'details') else None,
             }
         )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        logger.exception("Unexpected error in user agent config")
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.put("/config/trade", response_model=UserAgentConfigResponse)
@@ -208,12 +212,13 @@ async def update_trade_config(
         raise HTTPException(
             status_code=e.status_code,
             detail={
-                "message": str(e),
+                "message": e.detail,
                 "details": e.details if hasattr(e, 'details') else None,
             }
         )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        logger.exception("Unexpected error in user agent config")
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.post("/test-llm", response_model=TestLLMResponse)
@@ -257,7 +262,7 @@ async def test_llm_connection(
             success=False,
             provider="unknown",
             model="unknown",
-            message=f"LLM 连接测试失败: {str(e)}",
+            message="LLM 连接测试失败",
             latency_ms=None,
         )
 
@@ -289,12 +294,13 @@ async def reset_agent_config(
         raise HTTPException(
             status_code=e.status_code,
             detail={
-                "message": str(e),
+                "message": e.detail,
                 "details": e.details if hasattr(e, 'details') else None,
             }
         )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        logger.exception("Unexpected error in user agent config")
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.get("/safety/guidelines")

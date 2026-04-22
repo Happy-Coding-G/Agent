@@ -3,6 +3,8 @@
 提供任务状态查询、取消、队列监控等功能
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +13,8 @@ from app.db.models import Users
 from app.db.session import get_db
 from app.core.task_manager import task_manager
 from app.services.ingest_service import IngestService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Task Queue"])
 
@@ -29,8 +33,9 @@ async def get_task_status(
     try:
         status = task_manager.get_task_status(task_id)
         return status
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get task status: {e}")
+    except Exception:
+        logger.exception("Failed to get task status for task_id=%s", task_id)
+        raise HTTPException(status_code=500, detail="Failed to get task status")
 
 
 @router.post("/tasks/{task_id}/cancel")
@@ -52,8 +57,11 @@ async def cancel_task(
             return {"status": "success", "message": f"Task {task_id} cancelled"}
         else:
             raise HTTPException(status_code=400, detail="Failed to cancel task")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to cancel task: {e}")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to cancel task task_id=%s", task_id)
+        raise HTTPException(status_code=500, detail="Failed to cancel task")
 
 
 @router.get("/tasks/queue/stats")
@@ -61,18 +69,21 @@ async def get_queue_stats(
     current_user: Users = Depends(get_current_user),
 ):
     """
-    获取队列统计信息
+    获取队列统计信息（仅管理员）
 
     返回各队列的任务数量、worker 状态等
     """
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
     try:
         stats = task_manager.get_queue_stats()
         return {
             "status": "success",
             "stats": stats,
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get queue stats: {e}")
+    except Exception:
+        logger.exception("Failed to get queue stats")
+        raise HTTPException(status_code=500, detail="Failed to get queue stats")
 
 
 @router.get("/tasks/active")
@@ -80,8 +91,10 @@ async def list_active_tasks(
     current_user: Users = Depends(get_current_user),
 ):
     """
-    获取正在执行的任务列表
+    获取正在执行的任务列表（仅管理员）
     """
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
     try:
         tasks = task_manager.list_active_tasks()
         return {
@@ -89,8 +102,9 @@ async def list_active_tasks(
             "tasks": tasks,
             "count": len(tasks),
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list active tasks: {e}")
+    except Exception:
+        logger.exception("Failed to list active tasks")
+        raise HTTPException(status_code=500, detail="Failed to list active tasks")
 
 
 @router.post("/ingest-jobs/{ingest_id}/requeue")
@@ -118,8 +132,9 @@ async def requeue_ingest_job(
         }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to requeue job: {e}")
+    except Exception:
+        logger.exception("Failed to requeue ingest job ingest_id=%s", ingest_id)
+        raise HTTPException(status_code=500, detail="Failed to requeue job")
 
 
 @router.get("/ingest-jobs/{ingest_id}/status")
@@ -143,8 +158,9 @@ async def get_ingest_job_status(
         return status
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get job status: {e}")
+    except Exception:
+        logger.exception("Failed to get ingest job status ingest_id=%s", ingest_id)
+        raise HTTPException(status_code=500, detail="Failed to get job status")
 
 
 @router.post("/ingest-jobs/{ingest_id}/cancel")
@@ -174,5 +190,6 @@ async def cancel_ingest_job(
             )
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to cancel job: {e}")
+    except Exception:
+        logger.exception("Failed to cancel ingest job ingest_id=%s", ingest_id)
+        raise HTTPException(status_code=500, detail="Failed to cancel job")

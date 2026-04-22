@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
 from sqlalchemy import and_, delete, select
@@ -63,7 +63,7 @@ class WorkflowCheckpointService:
         Returns:
             检查点记录
         """
-        expires_at = datetime.utcnow() + timedelta(
+        expires_at = datetime.now(timezone.utc) + timedelta(
             days=ttl_days or self.DEFAULT_TTL_DAYS
         )
 
@@ -121,7 +121,7 @@ class WorkflowCheckpointService:
                 and_(
                     AgentIntermediateResults.task_id == task_id,
                     AgentIntermediateResults.step_name == step_name,
-                    AgentIntermediateResults.expires_at > datetime.utcnow(),
+                    AgentIntermediateResults.expires_at > datetime.now(timezone.utc),
                 )
             )
         )
@@ -146,7 +146,7 @@ class WorkflowCheckpointService:
             select(AgentIntermediateResults).where(
                 and_(
                     AgentIntermediateResults.task_id == task_id,
-                    AgentIntermediateResults.expires_at > datetime.utcnow(),
+                    AgentIntermediateResults.expires_at > datetime.now(timezone.utc),
                 )
             ).order_by(AgentIntermediateResults.created_at)
         )
@@ -155,7 +155,7 @@ class WorkflowCheckpointService:
 
         state = {
             "task_id": task_id,
-            "restored_at": datetime.utcnow().isoformat(),
+            "restored_at": datetime.now(timezone.utc).isoformat(),
             "steps": {},
             "completed_steps": [],
         }
@@ -200,7 +200,7 @@ class WorkflowCheckpointService:
         """
         result = await self.db.execute(
             delete(AgentIntermediateResults).where(
-                AgentIntermediateResults.expires_at < datetime.utcnow()
+                AgentIntermediateResults.expires_at < datetime.now(timezone.utc)
             ).execution_options(synchronize_session=False)
         )
         await self.db.commit()
@@ -227,7 +227,7 @@ class WorkflowCheckpointService:
         # 过期检查点数
         expired = await self.db.scalar(
             select(func.count(AgentIntermediateResults.id)).where(
-                AgentIntermediateResults.expires_at < datetime.utcnow()
+                AgentIntermediateResults.expires_at < datetime.now(timezone.utc)
             )
         )
 
@@ -304,7 +304,7 @@ class ResumableWorkflow:
         await self.checkpoint.save_step(
             task_id=self.task_id,
             step_name=step_name,
-            result_data={"result": result, "timestamp": datetime.utcnow().isoformat()},
+            result_data={"result": result, "timestamp": datetime.now(timezone.utc).isoformat()},
         )
 
         # 更新状态

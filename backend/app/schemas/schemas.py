@@ -13,9 +13,9 @@ class AuthRequest(BaseModel):
     )
     credential: str = Field(
         ...,
-        min_length=6,
+        min_length=8,
         max_length=128,
-        description="Password or auth credential",
+        description="Password or auth credential (minimum 8 characters)",
     )
     identity_type: str = Field(
         default="password",

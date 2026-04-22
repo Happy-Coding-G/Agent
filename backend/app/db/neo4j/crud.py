@@ -14,7 +14,7 @@ Edge Types:
 """
 import hashlib
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
@@ -593,7 +593,7 @@ def update_episode_community(
             "episode_ref": episode_ref,
             "user_id": user_id,
             "community_uuid": community_uuid,
-            "updated_at": datetime.utcnow().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         })
         record = result.single()
         return dict(record["ep"]) if record else None
@@ -615,6 +615,6 @@ def update_community_episode_count(community_uuid: str, user_id: str) -> bool:
         result = session.run(query, {
             "community_uuid": community_uuid,
             "user_id": user_id,
-            "updated_at": datetime.utcnow().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         })
         return result.single() is not None

@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -272,7 +272,7 @@ class UnifiedMemoryService:
         context = {
             "session_id": session_id,
             "user_id": user_id,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "layers": {},
         }
 
@@ -392,7 +392,7 @@ class UnifiedMemoryService:
             session_id=session.session_id,
             state={
                 "user_id": user_id,
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
                 "status": "active",
             },
         )

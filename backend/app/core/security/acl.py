@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional, List, Dict
 
@@ -195,7 +195,7 @@ class ACLService:
                     ResourceACL.user_id == user_id,
                     or_(
                         ResourceACL.expires_at.is_(None),
-                        ResourceACL.expires_at > datetime.utcnow(),
+                        ResourceACL.expires_at > datetime.now(timezone.utc),
                     ),
                 )
             )
@@ -265,7 +265,7 @@ class ACLService:
                     ResourceACL.is_public == True,
                     or_(
                         ResourceACL.expires_at.is_(None),
-                        ResourceACL.expires_at > datetime.utcnow(),
+                        ResourceACL.expires_at > datetime.now(timezone.utc),
                     ),
                 )
             )

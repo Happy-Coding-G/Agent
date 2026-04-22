@@ -201,160 +201,160 @@ class TradeService:
         3. Race conditions in wallet balance updates
 
         Transaction Flow:
-        1. Lock listing row (SELECT FOR UPDATE)
-        2. Lock buyer wallet row (SELECT FOR UPDATE)
-        3. Lock seller wallet row (SELECT FOR UPDATE) - order matters!
-        4. Validate all conditions
-        5. Create order, update wallets, create holding
-        6. Commit (or rollback on error)
+        1. Begin explicit transaction
+        2. Lock listing row (SELECT FOR UPDATE)
+        3. Lock buyer wallet row (SELECT FOR UPDATE)
+        4. Lock seller wallet row (SELECT FOR UPDATE) - order matters!
+        5. Validate all conditions (including idempotent already-purchased check)
+        6. Create order, update wallets, create holding
+        7. Commit (or rollback on error)
         """
-        # Check if already purchased (using holding record)
-        existing_holding = await self._repo.get_holding_by_listing(buyer.id, listing_id)
-        if existing_holding:
-            # Return existing order
-            order = await self._repo.get_order_by_public_id(existing_holding.order_id)
-            return {
-                "status": "already_purchased",
-                "order": self._format_order_response(order),
-                "holding": self._format_holding_response(existing_holding),
-            }
-
-        # Step 1: Lock and validate listing
-        listing = await self._repo.get_listing_by_public_id(listing_id, lock=True)
-        if not listing:
-            raise ServiceError(404, "Listing not found")
-
-        if listing.status != "active":
-            raise ServiceError(400, f"Listing is not active (status: {listing.status})")
-
-        if listing.seller_user_id == buyer.id:
-            raise ServiceError(400, "Cannot purchase your own listing")
-
-        # Step 2 & 3: Lock wallets (in consistent order to prevent deadlocks)
-        buyer_wallet = await self._repo.get_wallet(buyer.id, lock=True)
-        if not buyer_wallet:
-            raise ServiceError(404, "Buyer wallet not found")
-
-        seller_wallet = await self._repo.get_wallet(listing.seller_user_id, lock=True)
-        if not seller_wallet:
-            raise ServiceError(404, "Seller wallet not found")
-
-        # Check balance
-        price_credits = cents_to_credits(listing.price_credits)
-        if cents_to_credits(buyer_wallet.liquid_credits) < price_credits:
-            raise ServiceError(
-                400,
-                f"Insufficient balance. Available: {cents_to_credits(buyer_wallet.liquid_credits):.2f}, "
-                f"Required: {price_credits:.2f}"
-            )
-
-        # Step 4: Calculate amounts
-        platform_fee_rate = Decimal("0.05")
-        price_cents = Decimal(listing.price_credits)
-        platform_fee_cents = int(price_cents * platform_fee_rate)
-        seller_income_cents = listing.price_credits - platform_fee_cents
-
         try:
-            # Step 5: Execute all mutations
+            async with self._db.begin():
+                # Step 1: Lock and validate listing (inside transaction)
+                listing = await self._repo.get_listing_by_public_id(listing_id, lock=True)
+                if not listing:
+                    raise ServiceError(404, "Listing not found")
 
-            # Debit buyer
-            await self._repo.debit_wallet(
-                user_id=buyer.id,
-                amount_credits=price_credits,
-                tx_type="purchase",
-                metadata={
-                    "listing_id": listing_id,
-                    "seller_id": listing.seller_user_id,
-                },
-            )
+                if listing.status != "active":
+                    raise ServiceError(400, f"Listing is not active (status: {listing.status})")
 
-            # Credit seller (seller gets 95%)
-            await self._repo.credit_wallet(
-                user_id=listing.seller_user_id,
-                amount_credits=cents_to_credits(seller_income_cents),
-                tx_type="sale_income",
-                metadata={
-                    "listing_id": listing_id,
-                    "buyer_id": buyer.id,
-                    "platform_fee": cents_to_credits(platform_fee_cents),
-                },
-            )
+                if listing.seller_user_id == buyer.id:
+                    raise ServiceError(400, "Cannot purchase your own listing")
 
-            # Update seller's cumulative earnings
-            seller_wallet.cumulative_sales_earnings += seller_income_cents
+                # Step 2: Check idempotency inside the transaction so the check and
+                # subsequent write are atomic (prevents TOCTOU race).
+                existing_holding = await self._repo.get_holding_by_listing(buyer.id, listing_id)
+                if existing_holding:
+                    order = await self._repo.get_order_by_public_id(existing_holding.order_id)
+                    return {
+                        "status": "already_purchased",
+                        "order": self._format_order_response(order),
+                        "holding": self._format_holding_response(existing_holding),
+                    }
 
-            # Create order
-            import json
-            delivery_payload = json.loads(
-                listing.delivery_payload_encrypted.decode('utf-8')
-                if listing.delivery_payload_encrypted
-                else '{}'
-            )
+                # Step 3 & 4: Lock wallets (in consistent order to prevent deadlocks)
+                buyer_wallet = await self._repo.get_wallet(buyer.id, lock=True)
+                if not buyer_wallet:
+                    raise ServiceError(404, "Buyer wallet not found")
 
-            order = await self._repo.create_order(
-                listing=listing,
-                buyer_user_id=buyer.id,
-                delivery_payload=delivery_payload,
-            )
+                seller_wallet = await self._repo.get_wallet(listing.seller_user_id, lock=True)
+                if not seller_wallet:
+                    raise ServiceError(404, "Seller wallet not found")
 
-            # Update listing stats
-            await self._repo.update_listing_stats(
-                listing_id=listing_id,
-                increment_purchases=True,
-                revenue_cents=seller_income_cents,
-            )
+                # Check balance
+                price_credits = cents_to_credits(listing.price_credits)
+                if cents_to_credits(buyer_wallet.liquid_credits) < price_credits:
+                    raise ServiceError(
+                        400,
+                        f"Insufficient balance. Available: {cents_to_credits(buyer_wallet.liquid_credits):.2f}, "
+                        f"Required: {price_credits:.2f}"
+                    )
 
-            # Create holding
-            holding = await self._repo.create_holding(
-                user_id=buyer.id,
-                order_id=order.public_id,
-                listing_id=listing_id,
-                asset_title=listing.title,
-                seller_alias=listing.seller_alias,
-            )
+                # Step 5: Calculate amounts
+                platform_fee_rate = Decimal("0.05")
+                price_cents = Decimal(listing.price_credits)
+                platform_fee_cents = int(price_cents * platform_fee_rate)
+                seller_income_cents = listing.price_credits - platform_fee_cents
 
-            # Instantiate data rights transaction
-            rights_template = listing.rights_template or {}
-            from app.db.models import ComputationMethod
-            rights_tx = await self._repo.create_rights_transaction(
-                data_asset_id=listing.asset_id or "",
-                owner_id=listing.seller_user_id,
-                buyer_id=buyer.id,
-                listing_id=listing_id,
-                order_id=order.public_id,
-                rights_types=rights_template.get("rights_types", ["view", "download"]),
-                usage_scope=rights_template.get("usage_scope", {"purpose": "personal_research"}),
-                restrictions=rights_template.get("restrictions", []),
-                agreed_price=cents_to_credits(listing.price_credits),
-                computation_method=ComputationMethod(
-                    rights_template.get("computation_method", "raw_data")
-                ),
-                anonymization_level=rights_template.get("anonymization_level", 1),
-                validity_days=rights_template.get("validity_period_days", 365),
-            )
+                # Step 6: Execute all mutations
 
-            # Record rights lineage
-            lineage_service = LineageService(self._db)
-            await lineage_service.record_lineage(
-                entity_type=DataLineageType.ASSET,
-                entity_id=listing.asset_id or "",
-                event_type=LineageEventType.TRANSFORMED,
-                source_entity_type=DataLineageType.ASSET,
-                source_entity_id=listing.asset_id or "",
-                user_id=buyer.id,
-                space_id=listing.space_public_id or "",
-                metadata={
-                    "rights_transaction_id": rights_tx.transaction_id,
-                    "order_id": order.public_id,
-                    "rights_types": rights_template.get("rights_types", []),
-                    "event": "purchase_rights_assigned",
-                },
-                transformation_logic="Data rights assigned upon marketplace purchase",
-            )
+                # Debit buyer
+                await self._repo.debit_wallet(
+                    user_id=buyer.id,
+                    amount_credits=price_credits,
+                    tx_type="purchase",
+                    metadata={
+                        "listing_id": listing_id,
+                        "seller_id": listing.seller_user_id,
+                    },
+                )
 
-            # Commit transaction
-            await self._db.commit()
+                # Credit seller (seller gets 95%)
+                await self._repo.credit_wallet(
+                    user_id=listing.seller_user_id,
+                    amount_credits=cents_to_credits(seller_income_cents),
+                    tx_type="sale_income",
+                    metadata={
+                        "listing_id": listing_id,
+                        "buyer_id": buyer.id,
+                        "platform_fee": cents_to_credits(platform_fee_cents),
+                    },
+                )
 
+                # Update seller's cumulative earnings
+                seller_wallet.cumulative_sales_earnings += seller_income_cents
+
+                # Create order
+                import json
+                delivery_payload = json.loads(
+                    listing.delivery_payload_encrypted.decode('utf-8')
+                    if listing.delivery_payload_encrypted
+                    else '{}'
+                )
+
+                order = await self._repo.create_order(
+                    listing=listing,
+                    buyer_user_id=buyer.id,
+                    delivery_payload=delivery_payload,
+                )
+
+                # Update listing stats
+                await self._repo.update_listing_stats(
+                    listing_id=listing_id,
+                    increment_purchases=True,
+                    revenue_cents=seller_income_cents,
+                )
+
+                # Create holding
+                holding = await self._repo.create_holding(
+                    user_id=buyer.id,
+                    order_id=order.public_id,
+                    listing_id=listing_id,
+                    asset_title=listing.title,
+                    seller_alias=listing.seller_alias,
+                )
+
+                # Instantiate data rights transaction
+                rights_template = listing.rights_template or {}
+                from app.db.models import ComputationMethod
+                rights_tx = await self._repo.create_rights_transaction(
+                    data_asset_id=listing.asset_id or "",
+                    owner_id=listing.seller_user_id,
+                    buyer_id=buyer.id,
+                    listing_id=listing_id,
+                    order_id=order.public_id,
+                    rights_types=rights_template.get("rights_types", ["view", "download"]),
+                    usage_scope=rights_template.get("usage_scope", {"purpose": "personal_research"}),
+                    restrictions=rights_template.get("restrictions", []),
+                    agreed_price=cents_to_credits(listing.price_credits),
+                    computation_method=ComputationMethod(
+                        rights_template.get("computation_method", "raw_data")
+                    ),
+                    anonymization_level=rights_template.get("anonymization_level", 1),
+                    validity_days=rights_template.get("validity_period_days", 365),
+                )
+
+                # Record rights lineage
+                lineage_service = LineageService(self._db)
+                await lineage_service.record_lineage(
+                    entity_type=DataLineageType.ASSET,
+                    entity_id=listing.asset_id or "",
+                    event_type=LineageEventType.TRANSFORMED,
+                    source_entity_type=DataLineageType.ASSET,
+                    source_entity_id=listing.asset_id or "",
+                    user_id=buyer.id,
+                    space_id=listing.space_public_id or "",
+                    metadata={
+                        "rights_transaction_id": rights_tx.transaction_id,
+                        "order_id": order.public_id,
+                        "rights_types": rights_template.get("rights_types", []),
+                        "event": "purchase_rights_assigned",
+                    },
+                    transformation_logic="Data rights assigned upon marketplace purchase",
+                )
+
+            # Transaction committed by context manager exit
             return {
                 "status": "completed",
                 "order": self._format_order_response(order),
@@ -362,8 +362,6 @@ class TradeService:
             }
 
         except IntegrityError as e:
-            await self._db.rollback()
-
             # 检查是否是重复购买的唯一约束冲突
             error_str = str(e).lower()
             if "uk_holdings_user_listing" in error_str or "unique" in error_str:
@@ -375,13 +373,10 @@ class TradeService:
                         "order": self._format_order_response(order),
                         "holding": self._format_holding_response(existing),
                     }
+            raise ServiceError(500, "Purchase failed due to a database conflict")
 
-            raise ServiceError(500, f"Purchase failed: {str(e)}")
-
-        except Exception as e:
-            # Rollback on any other error
-            await self._db.rollback()
-            raise ServiceError(500, f"Purchase failed: {str(e)}")
+        except Exception:
+            raise ServiceError(500, "Purchase failed")
 
     async def purchase_negotiated(
         self, listing_id: str, buyer: Users, agreed_price_credits: float

@@ -232,6 +232,7 @@ class Users(Base):
         DateTime(timezone=True), server_default=text("now()")
     )
     display_name: Mapped[Optional[str]] = mapped_column(String(128))
+    is_admin: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
 
     spaces: Mapped[List["Spaces"]] = relationship("Spaces", back_populates="owner_user")
     user_auth: Mapped[List["UserAuth"]] = relationship(

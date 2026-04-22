@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 from enum import Enum
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
@@ -295,7 +295,7 @@ class PriceRiskControl:
         """获取市场平均价格"""
         try:
             # 获取最近30天内该类别的成交平均价
-            thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+            thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
 
             result = await self.db.execute(
                 select(func.avg(TradeOrders.price_credits))
@@ -361,7 +361,7 @@ class PriceRiskControl:
         Returns:
             市场分析数据
         """
-        since = datetime.utcnow() - timedelta(days=days)
+        since = datetime.now(timezone.utc) - timedelta(days=days)
 
         query = select(
             func.count(TradeOrders.order_id).label("total_orders"),
