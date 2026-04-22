@@ -32,7 +32,7 @@ from app.services.collaboration_service import (
     CollaborationWebSocketHandler,
     get_collaboration_service,
 )
-from app.services.lineage_service import LineageService, get_lineage_service
+from app.services.asset_lineage_pricing_service import AssetLineagePricingService
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ router = APIRouter()
     "/lineage/{entity_type}/{entity_id}",
     response_model=Dict[str, Any],
     summary="获取数据血缘",
-    description="获取实体的完整数据血缘（上下游）",
+    description="获取实体的完整数据血缘（上下游）。注意：当前仅支持 entity_type=asset",
 )
 async def get_lineage(
     entity_type: DataLineageType,
@@ -58,30 +58,26 @@ async def get_lineage(
     current_user: Users = Depends(get_current_user),
 ):
     """获取数据血缘"""
-    service = await get_lineage_service(db)
+    service = AssetLineagePricingService(db)
 
     result = {}
 
     if direction in ["upstream", "both"]:
-        upstream = await service.get_upstream_lineage(
-            entity_type, entity_id, max_depth
-        )
+        upstream = await service.get_upstream_lineage(entity_id, max_depth)
         result["upstream"] = [
             {
-                "nodes": [{"id": n.id, "type": n.entity_type, "name": n.name} for n in p.nodes],
-                "confidence": p.total_confidence,
+                "nodes": p.get("nodes", []),
+                "confidence": p.get("total_confidence", 1.0),
             }
             for p in upstream
         ]
 
     if direction in ["downstream", "both"]:
-        downstream = await service.get_downstream_lineage(
-            entity_type, entity_id, max_depth
-        )
+        downstream = await service.get_downstream_lineage(entity_id, max_depth)
         result["downstream"] = [
             {
-                "nodes": [{"id": n.id, "type": n.entity_type, "name": n.name} for n in p.nodes],
-                "confidence": p.total_confidence,
+                "nodes": p.get("nodes", []),
+                "confidence": p.get("total_confidence", 1.0),
             }
             for p in downstream
         ]
@@ -93,7 +89,7 @@ async def get_lineage(
     "/lineage/{entity_type}/{entity_id}/graph",
     response_model=Dict[str, Any],
     summary="获取血缘图",
-    description="获取用于可视化的血缘图数据",
+    description="获取用于可视化的血缘图数据。注意：当前仅支持 entity_type=asset",
 )
 async def get_lineage_graph(
     entity_type: DataLineageType,
@@ -103,15 +99,15 @@ async def get_lineage_graph(
     current_user: Users = Depends(get_current_user),
 ):
     """获取血缘图数据"""
-    service = await get_lineage_service(db)
-    return await service.get_lineage_graph(entity_type, entity_id, max_depth)
+    service = AssetLineagePricingService(db)
+    return await service.get_lineage_graph(entity_id, max_depth)
 
 
 @router.get(
     "/lineage/{entity_type}/{entity_id}/impact",
     response_model=Dict[str, Any],
     summary="影响分析",
-    description="分析修改某实体可能产生的影响",
+    description="分析修改某实体可能产生的影响。注意：当前仅支持 entity_type=asset",
 )
 async def analyze_impact(
     entity_type: DataLineageType,
@@ -121,8 +117,8 @@ async def analyze_impact(
     current_user: Users = Depends(get_current_user),
 ):
     """影响分析"""
-    service = await get_lineage_service(db)
-    return await service.get_impact_report(entity_type, entity_id)
+    service = AssetLineagePricingService(db)
+    return await service.get_impact_report(entity_id, max_depth)
 
 
 @router.get(
@@ -138,7 +134,7 @@ async def get_lineage_stats(
     current_user: Users = Depends(get_current_user),
 ):
     """血缘统计"""
-    service = await get_lineage_service(db)
+    service = AssetLineagePricingService(db)
     return await service.get_lineage_statistics(space_id, days)
 
 
@@ -293,7 +289,7 @@ async def purge_lineage(
     # 检查管理员权限
     # TODO: 实现管理员权限检查
 
-    service = await get_lineage_service(db)
+    service = AssetLineagePricingService(db)
     count = await service.purge_old_lineage(days, dry_run)
 
     return {

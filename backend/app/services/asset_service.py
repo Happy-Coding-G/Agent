@@ -25,7 +25,7 @@ from app.db.models import (
 )
 from app.services.base import SpaceAwareService, get_llm_client, preview_text
 from app.services.graph.graph_service import KnowledgeGraphService
-from app.services.lineage_service import LineageEventType, LineageService
+from app.services.asset_lineage_pricing_service import AssetLineagePricingService
 
 logger = logging.getLogger(__name__)
 
@@ -193,18 +193,18 @@ class AssetService(SpaceAwareService):
         await self.db.commit()
         await self.db.refresh(db_asset)
 
-        lineage_service = LineageService(self.db)
+        service = AssetLineagePricingService(self.db)
 
         for doc_id in source_document_ids:
-            await lineage_service.record_lineage(
-                entity_type=DataLineageType.KNOWLEDGE,
-                entity_id=asset_id,
-                event_type=LineageEventType.DERIVED,
-                source_entity_type=DataLineageType.FILE,
-                source_entity_id=str(doc_id),
+            await service.record_lineage(
+                source_type=DataLineageType.FILE,
+                source_id=str(doc_id),
+                current_entity_type=DataLineageType.KNOWLEDGE,
+                current_entity_id=asset_id,
+                relationship="derived",
                 user_id=user.id,
                 space_id=space_public_id,
-                metadata={
+                extra_metadata={
                     "generation_type": "knowledge_asset",
                     "prompt": prompt or "",
                     "operation": "create",
@@ -213,15 +213,15 @@ class AssetService(SpaceAwareService):
             )
 
         for src_asset_id in source_asset_ids or []:
-            await lineage_service.record_lineage(
-                entity_type=DataLineageType.ASSET,
-                entity_id=asset_id,
-                event_type=LineageEventType.DERIVED,
-                source_entity_type=DataLineageType.ASSET,
-                source_entity_id=src_asset_id,
+            await service.record_lineage(
+                source_type=DataLineageType.ASSET,
+                source_id=src_asset_id,
+                current_entity_type=DataLineageType.ASSET,
+                current_entity_id=asset_id,
+                relationship="derived",
                 user_id=user.id,
                 space_id=space_public_id,
-                metadata={
+                extra_metadata={
                     "generation_type": "knowledge_asset_derived",
                     "operation": "create",
                 },

@@ -24,25 +24,6 @@ async def execute_skill_md(name: str, arguments: Dict[str, Any], db: AsyncSessio
     }
 
 
-class PricingQuickQuoteInput(BaseModel):
-    """Backward-compatible input model for pricing_quick_quote."""
-
-    asset_id: str = Field(description="资产ID")
-    rights_types: List[str] = Field(
-        default_factory=lambda: ["usage", "analysis"],
-        description="权益类型列表",
-    )
-    duration_days: int = Field(default=365, ge=1, le=3650, description="授权天数")
-
-
-class LineageSummaryInput(BaseModel):
-    asset_id: str = Field(description="资产ID")
-
-
-class LineageImpactInput(BaseModel):
-    asset_id: str = Field(description="资产ID")
-
-
 class MarketOverviewInput(BaseModel):
     pass
 

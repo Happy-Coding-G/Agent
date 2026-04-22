@@ -5,15 +5,11 @@ Agent 层关于 skill 的 workflow、适用场景、输入输出契约，
 由 app.agents.skills.registry 负责统一定义。
 """
 
-from app.services.skills.pricing_skill import PricingSkill
-from app.services.skills.lineage_skill import DataLineageSkill
 from app.services.skills.market_analysis_skill import MarketAnalysisSkill
 from app.services.skills.privacy_skill import PrivacyComputationSkill
 from app.services.skills.audit_skill import AuditSkill
 
 __all__ = [
-    "PricingSkill",
-    "DataLineageSkill",
     "MarketAnalysisSkill",
     "PrivacyComputationSkill",
     "AuditSkill",

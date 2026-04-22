@@ -25,17 +25,9 @@ from app.services.trade.data_rights_events import (
 from app.services.trade.data_rights_service import DataRightsService
 
 # Phase 2: 高级功能
-from app.services.trade.data_lineage_tracker import (
-    DataLineageTracker,
-    DataQualityAssessor,
-)
 from app.services.trade.privacy_computation import (
     PrivacyComputationNegotiator,
     AnonymizationService,
-)
-from app.services.trade.pricing_engine import (
-    DynamicPricingEngine,
-    EnhancedDecisionEngine,
 )
 from app.services.trade.continuous_audit import (
     ContinuousAuditService,
@@ -71,17 +63,9 @@ __all__ = [
     "AnonymizationLevel",
     "QualityMetrics",
 
-    # Phase 2: 数据血缘与质量
-    "DataLineageTracker",
-    "DataQualityAssessor",
-
     # Phase 2: 隐私计算
     "PrivacyComputationNegotiator",
     "AnonymizationService",
-
-    # Phase 2: 定价与决策
-    "DynamicPricingEngine",
-    "EnhancedDecisionEngine",
 
     # Phase 2: 审计
     "ContinuousAuditService",

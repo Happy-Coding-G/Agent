@@ -1621,6 +1621,8 @@ class DataLineage(Base):
         Index("idx_lineage_current", "current_entity_type", "current_entity_id"),
         Index("idx_lineage_source", "source_type", "source_id"),
         Index("idx_lineage_parent", "parent_lineage_id"),
+        Index("idx_lineage_space", "space_id"),
+        Index("idx_lineage_hash", "lineage_hash"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -1649,18 +1651,41 @@ class DataLineage(Base):
         String(32), ForeignKey("data_lineage.lineage_id")
     )
 
-    # 审计
-    created_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=text("now()")
-    )
-
-    # 关系
+    # 关系（必须在 relationship 列之前定义，避免命名遮蔽）
     parent: Mapped[Optional["DataLineage"]] = relationship(
         "DataLineage", remote_side=[lineage_id], back_populates="children"
     )
     children: Mapped[List["DataLineage"]] = relationship(
         "DataLineage", back_populates="parent"
+    )
+
+    # 新增/补全列（统一血缘与定价服务）
+    relationship: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )  # derived/transformed/imported/...
+    transformation_logic: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    confidence_score: Mapped[float] = mapped_column(
+        Float, default=1.0, server_default=text("1.0")
+    )
+    quality_metrics: Mapped[dict] = mapped_column(
+        JSONB, server_default=text("'{}'")
+    )
+    lineage_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    parent_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    step_index: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0")
+    )
+    space_id: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, index=True
+    )
+    extra_metadata: Mapped[dict] = mapped_column(
+        JSONB, server_default=text("'{}'")
+    )
+
+    # 审计
+    created_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()")
     )
 
 
@@ -2167,28 +2192,6 @@ class PolicyViolations(Base):
         Index("ix_violation_severity", "severity"),
         Index("ix_violation_status", "manual_review_status"),
     )
-
-
-class DataLineageNodes(Base):
-    """数据血缘节点表"""
-    __tablename__ = "data_lineage_nodes"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    node_id = Column(String(64), unique=True, nullable=False, index=True)
-    asset_id = Column(String(64), ForeignKey("data_assets.asset_id"), nullable=False)
-    node_type = Column(String(50), nullable=False)
-    parent_nodes = Column(JSONB, default=list)
-    processing_logic_hash = Column(String(64), nullable=False)
-    quality_metrics = Column(JSONB, default=dict)
-    provenance_hash = Column(String(64), nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
-
-    __table_args__ = (
-        Index("ix_lineage_asset", "asset_id"),
-        Index("ix_lineage_type", "node_type"),
-    )
-
-
 
 
 # ============================================================================

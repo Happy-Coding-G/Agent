@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 
 from app.db.models import TradeListings, TradeOrders
-from app.services.pricing.pricing_service import UnifiedPricingService
+from app.services.asset_lineage_pricing_service import AssetLineagePricingService
 from app.core.errors import ServiceError
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ class PriceRiskControl:
 
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.pricing_service = UnifiedPricingService(db)
+        self.pricing_service = AssetLineagePricingService(db)
 
     async def validate_listing_price(
         self,
@@ -169,31 +169,30 @@ class PriceRiskControl:
             if not pricing:
                 return risks
 
-            # 与保守价格对比
-            if pricing.conservative_price > 0:
-                if listing_price < pricing.conservative_price * 0.5:
+            # 与建议价格区间对比
+            if pricing.price_range_min > 0:
+                if listing_price < pricing.price_range_min * 0.5:
                     risks.append(Risk(
                         type=RiskType.PRICE_TOO_LOW,
                         level=RiskLevel.HIGH,
-                        message=f"Price is 50% below conservative estimate",
+                        message=f"Price is 50% below recommended range minimum",
                         details={
                             "listing_price": listing_price,
-                            "conservative": pricing.conservative_price,
-                            "ratio": listing_price / pricing.conservative_price,
+                            "range_min": pricing.price_range_min,
+                            "ratio": listing_price / pricing.price_range_min,
                         }
                     ))
 
-            # 与激进价格对比
-            if pricing.aggressive_price > 0:
-                if listing_price > pricing.aggressive_price * 2:
+            if pricing.price_range_max > 0:
+                if listing_price > pricing.price_range_max * 2:
                     risks.append(Risk(
                         type=RiskType.PRICE_TOO_HIGH,
                         level=RiskLevel.MEDIUM,
-                        message=f"Price is 2x above aggressive estimate",
+                        message=f"Price is 2x above recommended range maximum",
                         details={
                             "listing_price": listing_price,
-                            "aggressive": pricing.aggressive_price,
-                            "ratio": listing_price / pricing.aggressive_price,
+                            "range_max": pricing.price_range_max,
+                            "ratio": listing_price / pricing.price_range_max,
                         }
                     ))
 

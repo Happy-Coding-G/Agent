@@ -19,7 +19,7 @@ from app.repositories.trade_repo import TradeRepository, cents_to_credits
 from app.db.models import TradeHoldings, TradeListings, TradeOrders, Users, DataAssets, DataLineageType
 from app.core.errors import ServiceError
 from ..asset_service import AssetService
-from app.services.lineage_service import LineageService, LineageEventType
+from app.services.asset_lineage_pricing_service import AssetLineagePricingService
 
 
 class TradeService:
@@ -103,7 +103,11 @@ class TradeService:
 
         # Auto-calculate price if not provided
         if price_credits is None or price_credits <= 0:
-            price_credits = self._calculate_auto_price(asset)
+            try:
+                pricing = await AssetLineagePricingService(self._db).calculate_price(asset_id)
+                price_credits = pricing.recommended_price
+            except Exception:
+                price_credits = self._calculate_auto_price(asset)
 
         # Build delivery payload
         delivery_payload = {
@@ -336,16 +340,16 @@ class TradeService:
                 )
 
                 # Record rights lineage
-                lineage_service = LineageService(self._db)
-                await lineage_service.record_lineage(
-                    entity_type=DataLineageType.ASSET,
-                    entity_id=listing.asset_id or "",
-                    event_type=LineageEventType.TRANSFORMED,
-                    source_entity_type=DataLineageType.ASSET,
-                    source_entity_id=listing.asset_id or "",
+                service = AssetLineagePricingService(self._db)
+                await service.record_lineage(
+                    source_type=DataLineageType.ASSET,
+                    source_id=listing.asset_id or "",
+                    current_entity_type=DataLineageType.ASSET,
+                    current_entity_id=listing.asset_id or "",
+                    relationship="transformed",
                     user_id=buyer.id,
                     space_id=listing.space_public_id or "",
-                    metadata={
+                    extra_metadata={
                         "rights_transaction_id": rights_tx.transaction_id,
                         "order_id": order.public_id,
                         "rights_types": rights_template.get("rights_types", []),
@@ -499,16 +503,16 @@ class TradeService:
                 validity_days=rights_template.get("validity_period_days", 365),
             )
 
-            lineage_service = LineageService(self._db)
-            await lineage_service.record_lineage(
-                entity_type=DataLineageType.ASSET,
-                entity_id=listing.asset_id or "",
-                event_type=LineageEventType.TRANSFORMED,
-                source_entity_type=DataLineageType.ASSET,
-                source_entity_id=listing.asset_id or "",
+            service = AssetLineagePricingService(self._db)
+            await service.record_lineage(
+                source_type=DataLineageType.ASSET,
+                source_id=listing.asset_id or "",
+                current_entity_type=DataLineageType.ASSET,
+                current_entity_id=listing.asset_id or "",
+                relationship="transformed",
                 user_id=buyer.id,
                 space_id=listing.space_public_id or "",
-                metadata={
+                extra_metadata={
                     "rights_transaction_id": rights_tx.transaction_id,
                     "order_id": order.public_id,
                     "rights_types": rights_template.get("rights_types", []),

@@ -22,7 +22,7 @@ _EXPORTS = {
     "FileService": ("app.services.file", "FileService"),
     "KnowledgeGraphService": ("app.services.graph", "KnowledgeGraphService"),
     "IngestService": ("app.services.ingest_service", "IngestService"),
-    "LineageService": ("app.services.lineage_service", "LineageService"),
+    "AssetLineagePricingService": ("app.services.asset_lineage_pricing_service", "AssetLineagePricingService"),
     "MarkdownService": ("app.services.markdown_service", "MarkdownDocumentService"),
     "SpaceService": ("app.services.space", "SpaceService"),
     "TradeService": ("app.services.trade", "TradeService"),
@@ -64,7 +64,7 @@ __all__ = [
     "FileService",
     "KnowledgeGraphService",
     "IngestService",
-    "LineageService",
+    "AssetLineagePricingService",
     "MarkdownService",
     "SpaceService",
     # Trade

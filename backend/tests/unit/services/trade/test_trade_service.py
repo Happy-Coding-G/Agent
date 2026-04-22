@@ -74,9 +74,9 @@ class TestPurchaseNegotiated:
             transaction_id="rt_123"
         ))
 
-        with patch("app.services.trade.trade_service.LineageService") as mock_lineage_cls:
-            mock_lineage = AsyncMock()
-            mock_lineage_cls.return_value = mock_lineage
+        with patch("app.services.trade.trade_service.AssetLineagePricingService") as mock_svc_cls:
+            mock_svc = AsyncMock()
+            mock_svc_cls.return_value = mock_svc
 
             result = await trade_service.purchase_negotiated(
                 listing_id="lst_123",
@@ -93,3 +93,6 @@ class TestPurchaseNegotiated:
             # 验证买方被扣款 80 credits (8000 cents -> 80.0 credits)
             debit_call = trade_service._repo.debit_wallet.await_args
             assert debit_call.kwargs["amount_credits"] == 80.0
+
+            # 验证血缘记录被调用
+            mock_svc.record_lineage.assert_awaited_once()

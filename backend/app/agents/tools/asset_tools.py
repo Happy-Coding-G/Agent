@@ -32,6 +32,27 @@ class OrganizeAssetsInput(BaseModel):
     space_id: str = Field(description="空间public_id")
 
 
+class GetAssetLineageInput(BaseModel):
+    asset_id: str = Field(description="资产ID")
+    max_depth: int = Field(default=3, ge=1, le=5, description="血缘追溯最大深度")
+
+
+class GetAssetPriceInput(BaseModel):
+    asset_id: str = Field(description="资产ID")
+
+
+class SimulateAssetPriceInput(BaseModel):
+    asset_id: str = Field(description="资产ID")
+    rights_types: Optional[List[str]] = Field(
+        default=None,
+        description="权益类型覆盖，如 ['view', 'download', 'derivative_right']",
+    )
+
+
+class VerifyAssetLineageInput(BaseModel):
+    asset_id: str = Field(description="资产ID")
+
+
 def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
     db = registry.db
     user = registry.user
@@ -155,6 +176,91 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
             logger.exception(f"organize_assets failed: {e}")
             return {"success": False, "error": str(e), "clusters": []}
 
+    async def get_asset_lineage(asset_id: str, max_depth: int = 3) -> Dict[str, Any]:
+        """获取资产的血缘图数据。"""
+        from app.services.asset_lineage_pricing_service import AssetLineagePricingService
+
+        try:
+            service = AssetLineagePricingService(db)
+            graph = await service.get_lineage_graph(asset_id, max_depth)
+            return {"success": True, "asset_id": asset_id, "graph": graph}
+        except Exception as e:
+            logger.exception(f"get_asset_lineage failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_asset_price(asset_id: str) -> Dict[str, Any]:
+        """获取资产的推荐定价。"""
+        from app.services.asset_lineage_pricing_service import AssetLineagePricingService
+
+        try:
+            service = AssetLineagePricingService(db)
+            pricing = await service.calculate_price(asset_id)
+            return {
+                "success": True,
+                "asset_id": asset_id,
+                "recommended_price": pricing.recommended_price,
+                "fair_value": pricing.fair_value,
+                "price_range": {
+                    "min": pricing.price_range_min,
+                    "max": pricing.price_range_max,
+                },
+                "lineage_verified": pricing.lineage_verified,
+                "quality_score": pricing.quality_score,
+            }
+        except Exception as e:
+            logger.exception(f"get_asset_price failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def simulate_asset_price(
+        asset_id: str, rights_types: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """模拟不同权益配置下的资产价格。"""
+        from app.services.asset_lineage_pricing_service import AssetLineagePricingService
+
+        try:
+            service = AssetLineagePricingService(db)
+            pricing = await service.calculate_price(asset_id, rights_types=rights_types)
+            return {
+                "success": True,
+                "asset_id": asset_id,
+                "rights_types": rights_types,
+                "recommended_price": pricing.recommended_price,
+                "fair_value": pricing.fair_value,
+                "price_range": {
+                    "min": pricing.price_range_min,
+                    "max": pricing.price_range_max,
+                },
+                "factors": {
+                    "base_value": pricing.factors.base_value,
+                    "quality_multiplier": pricing.factors.quality_multiplier,
+                    "scarcity_multiplier": pricing.factors.scarcity_multiplier,
+                    "lineage_multiplier": pricing.factors.lineage_multiplier,
+                    "rights_scope_multiplier": pricing.factors.rights_scope_multiplier,
+                    "market_multiplier": pricing.factors.market_multiplier,
+                    "sensitivity_multiplier": pricing.factors.sensitivity_multiplier,
+                    "computation_cost": pricing.factors.computation_cost,
+                },
+            }
+        except Exception as e:
+            logger.exception(f"simulate_asset_price failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def verify_asset_lineage(asset_id: str) -> Dict[str, Any]:
+        """验证资产血缘链的完整性。"""
+        from app.services.asset_lineage_pricing_service import AssetLineagePricingService
+
+        try:
+            service = AssetLineagePricingService(db)
+            verified = await service.verify_lineage_integrity(asset_id)
+            return {
+                "success": True,
+                "asset_id": asset_id,
+                "lineage_verified": verified,
+            }
+        except Exception as e:
+            logger.exception(f"verify_asset_lineage failed: {e}")
+            return {"success": False, "error": str(e)}
+
     return [
         StructuredTool.from_function(
             name="asset_manage",
@@ -169,5 +275,33 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
             description="对指定资产列表执行特征提取与聚类整理，生成整理报告。",
             args_schema=OrganizeAssetsInput,
             coroutine=organize_assets,
+        ),
+        StructuredTool.from_function(
+            name="get_asset_lineage",
+            func=get_asset_lineage,
+            description="获取指定资产的数据血缘图（上下游关系）",
+            args_schema=GetAssetLineageInput,
+            coroutine=get_asset_lineage,
+        ),
+        StructuredTool.from_function(
+            name="get_asset_price",
+            func=get_asset_price,
+            description="获取资产推荐定价（基于血缘、质量、稀缺性等因子）",
+            args_schema=GetAssetPriceInput,
+            coroutine=get_asset_price,
+        ),
+        StructuredTool.from_function(
+            name="simulate_asset_price",
+            func=simulate_asset_price,
+            description="模拟不同权益配置下的资产价格",
+            args_schema=SimulateAssetPriceInput,
+            coroutine=simulate_asset_price,
+        ),
+        StructuredTool.from_function(
+            name="verify_asset_lineage",
+            func=verify_asset_lineage,
+            description="验证资产血缘链的完整性（哈希校验）",
+            args_schema=VerifyAssetLineageInput,
+            coroutine=verify_asset_lineage,
         ),
     ]
