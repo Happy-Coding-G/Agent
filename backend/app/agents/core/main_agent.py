@@ -1,16 +1,9 @@
-"""主 Agent 编排入口。
-
-MainAgent 负责做 capability routing：
-- direct answer
-- tool
-- skill
-- subagent
-"""
+# 主控智能体负责能力路由
 
 import json
 import logging
 import uuid
-from typing import AsyncGenerator, Dict, Any, List, Optional
+from typing import TYPE_CHECKING, AsyncGenerator, Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -19,18 +12,20 @@ from sqlalchemy import select
 
 from .state import MainAgentState, AgentType, TaskStatus
 from .prompts import CAPABILITY_ROUTING_SYSTEM_PROMPT
-from app.agents.agents.protocol import AgentRequest, AgentResult
+from app.agents.agents.protocol import AgentRequest
+
+if TYPE_CHECKING:
+    from app.db.models import Users
+    from app.services.memory.unified_memory import UnifiedMemoryService
+    from app.agents.tools.registry import AgentToolRegistry
+    from app.agents.skills.registry import SkillRegistry
+    from app.agents.agents.registry import AgentRegistry
 
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# SubAgents (legacy helper, currently retained for QA streaming compatibility)
-# =============================================================================
-
-
+# 按用户标识查询用户对象，找不到时返回空值
 async def _get_user(db: AsyncSession, user_id: Optional[int]) -> Optional["Users"]:
-    """按 user_id 查询 User 对象，找不到返回 None。"""
     if not user_id:
         return None
     from app.db.models import Users
@@ -40,90 +35,29 @@ async def _get_user(db: AsyncSession, user_id: Optional[int]) -> Optional["Users
 
 
 class SubAgents:
+    # 兼容占位类：旧版子智能体封装已下线，保留最小接口避免迁移期间直接失效。
     def __init__(
         self, db: AsyncSession, llm_client=None, space_path: Optional[str] = None
     ):
         self._db = db
         self._llm_client = llm_client
         self._space_path = space_path
-        self._agents: Dict[AgentType, Any] = {}
-        self._graphs: Dict[AgentType, Any] = {}
-        self._handlers: Dict[AgentType, Any] = {}  # 注册表：AgentType → handler
-        self._initialized_types: set = set()
-
-    def _ensure_agent(self, agent_type: AgentType):
-        """按需延迟初始化指定的 subagent，避免一次性加载全部代理。"""
-        if agent_type in self._initialized_types:
-            return
-
-        try:
-            if agent_type == AgentType.QA:
-                from app.agents.subagents.qa_agent import QAAgent
-
-                self._agents[agent_type] = QAAgent(self._db)
-                self._graphs[agent_type] = self._agents[agent_type].graph
-
-            elif agent_type == AgentType.REVIEW:
-                from app.agents.subagents.review_agent import ReviewAgent
-
-                self._agents[agent_type] = ReviewAgent(self._db)
-                self._graphs[agent_type] = self._agents[agent_type].graph
-
-            elif agent_type == AgentType.ASSET_ORGANIZE:
-                from app.agents.subagents.asset_organize_agent import AssetOrganizeAgent
-
-                self._agents[agent_type] = AssetOrganizeAgent(self._db)
-                self._graphs[agent_type] = self._agents[agent_type].graph
-
-            elif agent_type == AgentType.TRADE:
-                from app.agents.subagents.trade.agent import TradeAgent
-
-                self._agents[agent_type] = TradeAgent(self._db)
-                self._graphs[agent_type] = self._agents[agent_type].graph
-
-            self._initialized_types.add(agent_type)
-            logger.info(f"Sub-agent initialized: {agent_type.value}")
-        except Exception as e:
-            logger.exception(f"Failed to initialize sub-agent {agent_type.value}: {e}")
-            raise
-
-    def _lazy_init(self):
-        """保留旧的 all-at-once 初始化入口，供仍需全量初始化的旧代码使用。"""
-        for at in (
-            AgentType.QA,
-            AgentType.REVIEW,
-            AgentType.ASSET_ORGANIZE,
-            AgentType.TRADE,
-        ):
-            try:
-                self._ensure_agent(at)
-            except Exception:
-                pass
-
-        self._handlers = {
-            AgentType.QA: self._invoke_qa,
-            AgentType.REVIEW: self._invoke_review,
-            AgentType.ASSET_ORGANIZE: self._invoke_asset_organize,
-            AgentType.TRADE: self._invoke_trade,
-            AgentType.CHAT: self._invoke_chat,
-        }
 
     async def invoke_subagent(
         self, agent_type: AgentType, input_state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        self._ensure_agent(agent_type)
-        # Legacy routing - now handled by Tool Registry. Kept for compat.
         return {
-            "error": "Legacy subagent routing is deprecated. Use Tool Registry.",
+            "subagent": agent_type.value,
+            "error": "SubAgents compatibility shim is deprecated. Use AgentRegistry or Tool Registry.",
             "success": False,
         }
 
     def get_registered_agents(self) -> list[str]:
-        return [agent_type.value for agent_type in self._agents.keys()]
+        return []
 
 
 # =============================================================================
-# MainAgent - Tool-Aware ReAct Agent
+# 主控智能体：具备工具感知能力的推理-行动执行器
 # =============================================================================
 class MainAgent:
     def __init__(
@@ -175,13 +109,64 @@ class MainAgent:
 
         return AgentRegistry()
 
+    def _format_capability_payload(self, payload: Any) -> str:
+        try:
+            return json.dumps(payload, ensure_ascii=False, indent=2)
+        except TypeError:
+            return str(payload)
+
+    def _build_capability_summary_parts(
+        self,
+        tool_results: List[Dict[str, Any]],
+        skill_results: List[Dict[str, Any]],
+        subagent_results: List[Dict[str, Any]],
+    ) -> List[str]:
+        parts = []
+        parts.extend(
+            f"【tool:{r.get('tool', 'unknown')}】执行结果：\n{self._format_capability_payload(r.get('result'))}"
+            for r in tool_results
+        )
+        parts.extend(
+            f"【skill:{r.get('skill', 'unknown')}】执行结果：\n{self._format_capability_payload(r.get('result'))}"
+            for r in skill_results
+        )
+        parts.extend(
+            f"【subagent:{r.get('subagent', 'unknown')}】"
+            f"{'✓' if r.get('success') else '✗'} {r.get('summary') or r.get('error', '')}"
+            for r in subagent_results
+        )
+        return parts
+
+    def _build_capability_prompt_lines(
+        self,
+        tool_results: List[Dict[str, Any]],
+        skill_results: List[Dict[str, Any]],
+        subagent_results: List[Dict[str, Any]],
+    ) -> List[str]:
+        lines = []
+        lines.extend(
+            f"工具 {r.get('tool', 'unknown')} 执行结果: {self._format_capability_payload(r.get('result'))}"
+            for r in tool_results
+        )
+        lines.extend(
+            f"技能 {r.get('skill', 'unknown')} 执行结果: {self._format_capability_payload(r.get('result'))}"
+            for r in skill_results
+        )
+        for r in subagent_results:
+            subagent_name = r.get("subagent", "unknown")
+            if r.get("success"):
+                lines.append(f"SubAgent {subagent_name} 执行成功: {r.get('summary', '')}")
+            else:
+                lines.append(f"SubAgent {subagent_name} 执行失败: {r.get('error', '未知错误')}")
+        return lines
+
     def _build_graph(self) -> StateGraph:
         workflow = StateGraph(MainAgentState)
 
         workflow.add_node("plan", self._plan_step)
         workflow.add_node("execute_tool", self._execute_tool)
         workflow.add_node("execute_skill", self._execute_skill)
-        workflow.add_node("execute_agent", self._execute_agent)
+        workflow.add_node("execute_subagent", self._execute_subagent)
         workflow.add_node("respond", self._respond_step)
         workflow.add_node("handle_error", self._handle_error)
 
@@ -194,7 +179,7 @@ class MainAgent:
                 "direct": "respond",
                 "tool": "execute_tool",
                 "skill": "execute_skill",
-                "agent": "execute_agent",
+                "subagent": "execute_subagent",
                 "error": "handle_error",
             },
         )
@@ -212,13 +197,17 @@ class MainAgent:
         )
 
         workflow.add_conditional_edges(
-            "execute_agent",
+            "execute_subagent",
             self._post_execution_router,
             {"respond": "respond", "error": "handle_error"},
         )
 
         workflow.add_edge("respond", END)
-        workflow.add_edge("handle_error", END)
+        workflow.add_conditional_edges(
+            "handle_error",
+            self._error_router,
+            {"retry": "plan", "end": END},
+        )
 
         checkpointer = MemorySaver()
         return workflow.compile(checkpointer=checkpointer)
@@ -231,7 +220,7 @@ class MainAgent:
         if state.get("active_skill"):
             return "skill"
         if state.get("active_subagent_call"):
-            return "agent"
+            return "subagent"
         return "direct"
 
     def _tool_router(self, state: MainAgentState) -> str:
@@ -248,8 +237,17 @@ class MainAgent:
             return "error"
         return "respond"
 
+    def _error_router(self, state: MainAgentState) -> str:
+        if (
+            state.get("task_status") == TaskStatus.PENDING
+            and state.get("retry_count", 0) > 0
+            and not state.get("error")
+        ):
+            return "retry"
+        return "end"
+
+    # 读取能力列表，决策路由
     async def _plan_step(self, state: MainAgentState) -> MainAgentState:
-        """读取 capability 列表，决定 direct/tool/skill/subagent。"""
         user_request = state.get("user_request", "")
         space_id = state.get("space_id")
         user_id = state.get("user_id")
@@ -328,9 +326,9 @@ class MainAgent:
                         "arguments": decision.get("arguments", {}),
                     }
                     state["active_subagent_call"] = subagent_call
-                    sac = state.get("subagent_calls", [])
-                    sac.append(subagent_call)
-                    state["subagent_calls"] = sac
+                    subagent_calls = state.get("subagent_calls", [])
+                    subagent_calls.append(subagent_call)
+                    state["subagent_calls"] = subagent_calls
                 else:
                     state["final_answer"] = decision.get("answer") or content.strip()
             else:
@@ -341,10 +339,10 @@ class MainAgent:
 
         return state
 
+    # 当模型不可用时，基于简单意图执行降级路由
     async def _fallback_plan(
         self, state: MainAgentState, registry, intent: AgentType
     ) -> MainAgentState:
-        """当 LLM 不可用时，基于简单意图进行 capability fallback。"""
         user_request = state.get("user_request", "")
         space_id = state.get("space_id")
 
@@ -353,29 +351,35 @@ class MainAgent:
             state["final_answer"] = None
             return state
 
-        tool_map = {
+        subagent_map = {
             AgentType.REVIEW: (
-                "review_document",
+                "review_workflow",
                 {"doc_id": "", "review_type": "standard"},
             ),
-            AgentType.ASSET_ORGANIZE: ("asset_organize", {"asset_ids": []}),
-            AgentType.TRADE: ("trade_goal", {"intent": "yield"}),
+            AgentType.ASSET_ORGANIZE: (
+                "asset_organize_workflow",
+                {"asset_ids": [], "space_id": space_id or ""},
+            ),
+            AgentType.TRADE: (
+                "trade_workflow",
+                {"action": "purchase", "space_id": space_id or "", "payload": {}},
+            ),
         }
 
-        if intent in tool_map:
-            name, args = tool_map[intent]
-            tool_call = {"name": name, "arguments": args}
-            state["active_tool"] = tool_call
-            tc = state.get("tool_calls", [])
-            tc.append(tool_call)
-            state["tool_calls"] = tc
+        if intent in subagent_map:
+            name, args = subagent_map[intent]
+            subagent_call = {"name": name, "arguments": args}
+            state["active_subagent_call"] = subagent_call
+            sac = state.get("subagent_calls", [])
+            sac.append(subagent_call)
+            state["subagent_calls"] = sac
         else:
             state["active_tool"] = None
 
         return state
 
     def _extract_routing_decision(self, content: str) -> Optional[Dict[str, Any]]:
-        """从 LLM 回复中提取 capability routing decision。"""
+        # 从模型回复中提取能力路由决策。
         try:
             if "```json" in content:
                 json_block = content.split("```json")[1].split("```")[0].strip()
@@ -393,7 +397,7 @@ class MainAgent:
                 mode = decision.get("mode")
                 if mode == "direct":
                     return {"mode": "direct", "answer": decision.get("answer", "")}
-                if mode in {"tool", "skill", "agent", "subagent"}:
+                if mode in {"tool", "skill", "subagent"}:
                     return {
                         "mode": mode,
                         "name": decision.get("name"),
@@ -456,7 +460,7 @@ class MainAgent:
         return AgentType.CHAT
 
     async def _execute_tool(self, state: MainAgentState) -> MainAgentState:
-        """通过 registry 执行当前 active_tool。"""
+        # 通过工具注册表执行当前待执行工具。
         active_tool = state.get("active_tool")
         if not active_tool:
             return state
@@ -516,10 +520,10 @@ class MainAgent:
 
         return state
 
-    async def _execute_agent(self, state: MainAgentState) -> MainAgentState:
-        """通过 AgentRegistry 执行 Agent 任务（独立会话模式）。"""
-        active_agent = state.get("active_subagent_call")
-        if not active_agent:
+    # 通过智能体注册表执行任务（独立会话模式）
+    async def _execute_subagent(self, state: MainAgentState) -> MainAgentState:
+        active_subagent = state.get("active_subagent_call")
+        if not active_subagent:
             return state
 
         user_id = state.get("user_id")
@@ -541,18 +545,18 @@ class MainAgent:
             # 构建上下文摘要（不传递完整历史）
             context_summary = await self._build_context_summary(state)
 
-            # 创建 Agent 请求
+            # 创建智能体请求
             request = AgentRequest(
-                agent_id=active_agent.get("name"),
+                agent_id=active_subagent.get("name"),
                 task_description=state.get("user_request", ""),
-                arguments=active_agent.get("arguments", {}),
+                arguments=active_subagent.get("arguments", {}),
                 parent_session_id=state.get("session_id", ""),
                 context_summary=context_summary,
                 user_id=user_id,
                 space_id=state.get("space_id"),
             )
 
-            # 通过 AgentRegistry 执行（独立会话）
+            # 通过智能体注册表执行（独立会话）
             result = await registry.execute_agent(
                 request,
                 db=self._db,
@@ -560,16 +564,16 @@ class MainAgent:
             )
 
             # 记录结果
-            sr = state.get("subagent_results", [])
-            sr.append({
-                "agent": active_agent.get("name"),
+            subagent_results = state.get("subagent_results", [])
+            subagent_results.append({
+                "subagent": active_subagent.get("name"),
                 "success": result.success,
                 "summary": result.summary,
                 "artifacts": result.artifacts,
                 "error": result.error,
                 "sidechain_id": result.sidechain_id,
             })
-            state["subagent_results"] = sr
+            state["subagent_results"] = subagent_results
             state["active_subagent_call"] = None
 
             # 将摘要存入最终答案
@@ -581,7 +585,7 @@ class MainAgent:
                 await self._memory.log_event(
                     event_type="agent_invoked",
                     payload={
-                        "agent_id": active_agent.get("name"),
+                        "agent_id": active_subagent.get("name"),
                         "success": result.success,
                         "summary": result.summary[:200],
                     },
@@ -590,20 +594,18 @@ class MainAgent:
                 )
 
         except Exception as e:
-            logger.exception(f"Agent execution failed: {e}")
+            logger.exception(f"Subagent execution failed: {e}")
             state["error"] = str(e)
 
         return state
 
     async def _build_context_summary(self, state: MainAgentState) -> str:
-        """构建传递给 Agent 的上下文摘要。
-
-        原则：
-        - 只包含 Agent 完成任务所需的关键信息
-        - 不包含完整的对话历史
-        - 不包含与当前任务无关的记忆
-        - 长度控制在 1000-2000 token
-        """
+        # 构建传递给智能体的上下文摘要。
+        # 原则：
+        # - 只包含智能体完成任务所需的关键信息
+        # - 不包含完整的对话历史
+        # - 不包含与当前任务无关的记忆
+        # - 长度控制在约 1000-2000 个模型令牌以内
         parts = []
 
         # 1. 当前用户请求
@@ -613,7 +615,7 @@ class MainAgent:
         if state.get("intent"):
             parts.append(f"识别意图: {state['intent'].value}")
 
-        # 3. 相关记忆（从 L5 检索）
+        # 3. 相关记忆（从长期记忆层检索）
         if self._memory:
             try:
                 relevant_memories = await self._memory.longterm.search_memories(
@@ -639,7 +641,7 @@ class MainAgent:
         return "\n\n".join(parts)
 
     async def _respond_step(self, state: MainAgentState) -> MainAgentState:
-        """基于 capability 执行结果或直接回复生成最终中文回复。"""
+        # 基于能力执行结果或直接回复生成最终中文回复。
         final_answer = state.get("final_answer")
         tool_results = state.get("tool_results", [])
         skill_results = state.get("skill_results", [])
@@ -665,19 +667,8 @@ class MainAgent:
             return state
 
         if not self._llm_client:
-            summary_parts = []
-            summary_parts.extend(
-                f"【tool:{r['tool']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
-                for r in tool_results
-            )
-            summary_parts.extend(
-                f"【skill:{r['skill']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
-                for r in skill_results
-            )
-            summary_parts.extend(
-                f"【agent:{r.get('agent', r.get('subagent', 'unknown'))}】"
-                f"{'✓' if r.get('success') else '✗'} {r.get('summary', '')}"
-                for r in subagent_results
+            summary_parts = self._build_capability_summary_parts(
+                tool_results, skill_results, subagent_results
             )
             state["task_result"] = {
                 "answer": "\n\n".join(summary_parts),
@@ -687,20 +678,15 @@ class MainAgent:
             return state
 
         try:
-            # 构建更友好的 capability 结果摘要
-            agent_summaries = []
-            for r in subagent_results:
-                agent_name = r.get("agent", r.get("subagent", "unknown"))
-                if r.get("success"):
-                    agent_summaries.append(f"Agent '{agent_name}' 执行成功: {r.get('summary', '')}")
-                else:
-                    agent_summaries.append(f"Agent '{agent_name}' 执行失败: {r.get('error', '未知错误')}")
+            capability_summaries = self._build_capability_prompt_lines(
+                tool_results, skill_results, subagent_results
+            )
 
             prompt = (
                 "你是一个 helpful 的 AI 助手。根据用户的请求和能力执行结果，生成一段自然、简洁的中文回复。\n\n"
                 f"用户请求：{user_request}\n\n"
                 "执行结果摘要：\n"
-                + "\n".join(agent_summaries)
+                + "\n".join(capability_summaries)
                 + "\n\n请直接回复用户，不要暴露内部 capability 名称和 JSON 结构："
             )
             response = await self._llm_client.ainvoke(prompt)
@@ -711,19 +697,8 @@ class MainAgent:
             state["task_status"] = TaskStatus.COMPLETED
         except Exception as e:
             logger.warning(f"Respond generation failed: {e}")
-            summary_parts = []
-            summary_parts.extend(
-                f"【tool:{r['tool']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
-                for r in tool_results
-            )
-            summary_parts.extend(
-                f"【skill:{r['skill']}】执行结果：\n{json.dumps(r['result'], ensure_ascii=False, indent=2)}"
-                for r in skill_results
-            )
-            summary_parts.extend(
-                f"【agent:{r.get('agent', r.get('subagent', 'unknown'))}】"
-                f"{'✓' if r.get('success') else '✗'} {r.get('summary', '')}"
-                for r in subagent_results
+            summary_parts = self._build_capability_summary_parts(
+                tool_results, skill_results, subagent_results
             )
             state["task_result"] = {
                 "answer": "\n\n".join(summary_parts),
@@ -746,7 +721,7 @@ class MainAgent:
         return state
 
     # ==========================================================================
-    # Streaming Chat (保持现有 SSE 事件协议兼容)
+    # 流式对话（保持现有服务端事件流协议兼容）
     # ==========================================================================
     async def stream_chat(
         self,
@@ -757,7 +732,7 @@ class MainAgent:
         context: Optional[Dict] = None,
         top_k: int = 5,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        # 1. 若存在 session_id 且 memory_service 存在，召回历史上下文
+        # 1. 如果传入会话标识且记忆服务可用，则召回历史上下文
         conversation_history: List[Dict[str, str]] = []
         if session_id and self._memory:
             recalled = await self._memory.recall_chat_context(
@@ -801,17 +776,6 @@ class MainAgent:
         yield {"type": "intent", "data": intent.value}
         yield {"type": "agent_type", "data": intent.value}
 
-        if intent == AgentType.QA:
-            yield {"type": "status", "data": "running"}
-            has_error = False
-            async for event in self._stream_qa_agent(initial_state, top_k):
-                if event.get("type") == "error":
-                    has_error = True
-                yield event
-            if not has_error:
-                yield {"type": "status", "data": "completed"}
-            return
-
         yield {"type": "status", "data": "planning"}
         has_error = False
         try:
@@ -836,66 +800,6 @@ class MainAgent:
 
         if not has_error:
             yield {"type": "status", "data": "completed"}
-
-    async def _stream_qa_agent(
-        self,
-        state: MainAgentState,
-        top_k: int = 5,
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        user = await _get_user(self._db, state.get("user_id"))
-
-        if not user:
-            yield {"type": "error", "data": "User not found"}
-            return
-
-        qa_agent = None
-        try:
-            # 直接实例化 QAAgent（不通过旧的 SubAgents）
-            from app.agents.subagents.qa_agent import QAAgent
-            qa_agent = QAAgent(self._db)
-        except Exception as e:
-            logger.exception(f"Failed to initialize QA Agent: {e}")
-            yield {"type": "error", "data": f"QA Agent initialization failed: {e}"}
-            return
-
-        if not qa_agent:
-            yield {"type": "error", "data": "QA Agent not available"}
-            return
-
-        space_id = state.get("space_id", "")
-        message = state.get("user_request", "")
-        session_id = state.get("session_id")
-
-        try:
-            async for event in qa_agent.stream(
-                query=message,
-                space_public_id=space_id,
-                user=user,
-                top_k=top_k,
-                conversation_history=state.get("conversation_history", []),
-                session_id=session_id,
-            ):
-                if event["type"] == "token":
-                    yield {"type": "token", "data": event["content"]}
-                elif event["type"] == "status":
-                    yield {"type": "status", "data": event["content"]}
-                elif event["type"] == "sources":
-                    yield {"type": "sources", "data": event.get("content", [])}
-                elif event["type"] == "result":
-                    result = event["content"]
-                    state["subagent_result"] = result
-                    state["task_result"] = result
-                    state["task_status"] = TaskStatus.COMPLETED
-                    yield {"type": "result", "data": result}
-                elif event["type"] == "error":
-                    state["error"] = event["content"]
-                    state["task_status"] = TaskStatus.FAILED
-                    yield {"type": "error", "data": event["content"]}
-        except Exception as e:
-            logger.exception(f"QA streaming failed: {e}")
-            state["error"] = str(e)
-            state["task_status"] = TaskStatus.FAILED
-            yield {"type": "error", "data": str(e)}
 
     async def chat(
         self,

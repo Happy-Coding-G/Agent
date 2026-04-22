@@ -1,21 +1,15 @@
-"""Sub-agent package with lazy exports.
+"""Sub-agent package.
 
-Backward compatibility: re-exports AgentRegistry as SubAgentRegistry
-for legacy code that imports from this module.
+Note: Legacy LangGraph-based subagents have been migrated to .md-driven
+AgentSession (ReAct mode). All agent execution now goes through
+AgentRegistry → AgentSession.
 """
 
 from importlib import import_module
 
 _EXPORTS = {
-    "QAAgent": ("app.agents.subagents.qa_agent", "QAAgent"),
-    "ReviewAgent": ("app.agents.subagents.review_agent", "ReviewAgent"),
-    "AssetOrganizeAgent": ("app.agents.subagents.asset_organize_agent", "AssetOrganizeAgent"),
-    "TradeAgent": ("app.agents.subagents.trade", "TradeAgent"),
-    # SubAgentRegistry is now an alias for AgentRegistry
     "SubAgentRegistry": ("app.agents.agents.registry", "AgentRegistry"),
     "AgentRegistry": ("app.agents.agents.registry", "AgentRegistry"),
-    "DynamicWorkflowSubAgent": ("app.agents.subagents.template", "DynamicWorkflowSubAgent"),
-    "SubAgentTemplate": ("app.agents.subagents.template", "SubAgentTemplate"),
 }
 
 __all__ = list(_EXPORTS)

@@ -183,13 +183,7 @@ class AgentSession:
     # --------------------------------------------------------------------------
 
     async def execute(self, request: AgentRequest) -> AgentResult:
-        """执行 Agent 任务。
-
-        执行策略：
-        1. 如果 .md 定义中指定了 legacy executor（指向现有 Agent 类），
-           直接调用该类的 run() 方法（保持现有 LangGraph 实现不变）
-        2. 否则使用新的 ReAct 自主循环模式
-        """
+        """执行 Agent 任务（ReAct 自主循环模式）。"""
         await self._ensure_initialized()
 
         try:
@@ -199,13 +193,7 @@ class AgentSession:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
 
-            # 2. 尝试 legacy executor（直接调用现有 Agent 类）
-            if self.definition.executor:
-                result = await self._execute_legacy_agent(request)
-                await self.sidechain.finalize()
-                return result
-
-            # 3. 新的 ReAct 自主循环模式
+            # 2. ReAct 自主循环模式
             context = await self._build_context(request)
             raw_result = await self._react_loop(context, request)
             summary = await self._summarize_result(raw_result)
@@ -274,156 +262,6 @@ class AgentSession:
             await self.sidechain.finalize()
             if self._db_owned and self._db:
                 await self._db.close()
-
-    # --------------------------------------------------------------------------
-    # Legacy Agent 适配（保持现有 LangGraph 实现不变）
-    # --------------------------------------------------------------------------
-
-    async def _execute_legacy_agent(self, request: AgentRequest) -> AgentResult:
-        """调用 .md 中定义的 legacy executor（现有 Agent 类）。
-
-        根据 agent_id 映射到现有 Agent 类，提取参数并调用 run() 方法。
-        结果转换为 AgentResult 格式，同时记录 sidechain。
-        """
-        from app.agents.skills.executor import get_executor_method
-
-        try:
-            # 解析 executor 路径
-            method = get_executor_method(self.definition.executor, self._db)
-
-            # 从 request 中提取参数
-            args = self._extract_legacy_args(request)
-
-            await self.sidechain.log("legacy_invoke", {
-                "executor": self.definition.executor,
-                "args_keys": list(args.keys()),
-            })
-
-            # 调用现有 Agent 的 run 方法
-            raw_result = await method(**args)
-
-            # 记录工具调用（如果结果中包含）
-            if isinstance(raw_result, dict):
-                await self.sidechain.log("legacy_result", {
-                    "success": raw_result.get("success", False),
-                    "result_keys": list(raw_result.keys()),
-                })
-
-            # 转换为 AgentResult
-            summary = self._legacy_result_to_summary(raw_result)
-            artifacts = [raw_result] if isinstance(raw_result, dict) else []
-
-            await self.sidechain.log("task_complete", {
-                "summary": summary,
-                "mode": "legacy_executor",
-            })
-
-            # 同步到 L4 记忆
-            if self.memory:
-                await self.memory.log_event(
-                    event_type="agent_task_complete",
-                    payload={
-                        "agent_id": self.agent_id,
-                        "success": raw_result.get("success", False) if isinstance(raw_result, dict) else True,
-                        "summary": summary,
-                        "mode": "legacy",
-                    },
-                    session_id=self.parent_session_id,
-                    agent_type=self.agent_id,
-                )
-
-            return AgentResult(
-                success=raw_result.get("success", False) if isinstance(raw_result, dict) else True,
-                summary=summary,
-                artifacts=artifacts,
-                sidechain_id=self.sidechain.session_id,
-                correlation_id=request.correlation_id,
-                agent_id=self.agent_id,
-            )
-
-        except Exception as e:
-            logger.exception(f"Legacy agent execution failed: {e}")
-            summary = f"Agent {self.agent_id} (legacy) 执行异常: {str(e)}"
-            await self.sidechain.log("task_error", {"error": str(e), "mode": "legacy"})
-            return AgentResult(
-                success=False,
-                summary=summary,
-                error=str(e),
-                sidechain_id=self.sidechain.session_id,
-                correlation_id=request.correlation_id,
-                agent_id=self.agent_id,
-            )
-
-    def _extract_legacy_args(self, request: AgentRequest) -> Dict[str, Any]:
-        """从 AgentRequest 中提取 legacy Agent 所需的参数。"""
-        args = dict(request.arguments)
-        args["session_id"] = request.parent_session_id
-
-        # 注入 user 对象（如果定义中有 executor 且需要 user）
-        if self.user_id and "user_id" in str(self.definition.executor):
-            pass  # 某些 executor 需要 user 对象，在 get_executor_method 中已经注入 db
-
-        # 为不同 Agent 做参数映射
-        agent_id = self.agent_id
-
-        if agent_id == "qa_research":
-            # QAAgent.run(query, space_public_id, user, top_k, ...)
-            if "space_id" in args and "space_public_id" not in args:
-                args["space_public_id"] = args.pop("space_id")
-            if "query" not in args and request.task_description:
-                args["query"] = request.task_description
-            # user 对象会在 get_executor_method 实例化时传入 db
-
-        elif agent_id == "trade_workflow":
-            # TradeAgent.run(action, space_public_id, user, ...)
-            if "space_id" in args and "space_public_id" not in args:
-                args["space_public_id"] = args.pop("space_id")
-            if "user" not in args:
-                pass  # TradeAgent 通过 db 获取 user
-
-        elif agent_id == "review_workflow":
-            # ReviewAgent.run(doc_id, review_type)
-            pass
-
-        elif agent_id == "asset_organize_workflow":
-            # AssetOrganizeAgent.run(asset_ids, space_id, user)
-            pass
-
-        return args
-
-    def _legacy_result_to_summary(self, raw_result: Any) -> str:
-        """将 legacy Agent 的结果转换为摘要。"""
-        if not isinstance(raw_result, dict):
-            return str(raw_result)[:500]
-
-        # QA Agent
-        if "answer" in raw_result:
-            return raw_result["answer"]
-
-        # Trade Agent
-        if "status" in raw_result and "plan_id" in raw_result:
-            status = raw_result.get("status", "unknown")
-            error = raw_result.get("error", "")
-            if error:
-                return f"交易执行失败: {error}"
-            return f"交易执行完成，状态: {status}"
-
-        # Review Agent
-        if "final_status" in raw_result:
-            status = raw_result.get("final_status", "unknown")
-            return f"文档审查完成，状态: {status}"
-
-        # Asset Organize Agent
-        if "clusters" in raw_result:
-            num = raw_result.get("num_clusters", 0)
-            return f"资产整理完成，生成 {num} 个聚类"
-
-        # 通用 fallback
-        success = raw_result.get("success", False)
-        msg = raw_result.get("message", "")
-        if msg:
-            return msg
-        return f"执行{'成功' if success else '失败'}: {str(raw_result)[:300]}"
 
     # --------------------------------------------------------------------------
     # ReAct 循环（使用 LLM Function Calling）

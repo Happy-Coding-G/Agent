@@ -11,8 +11,17 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.skills.executor import execute_skill_md
 from app.agents.skills.parser import SkillMDParser
+
+
+async def execute_skill_md(name: str, arguments: Dict[str, Any], db: AsyncSession, parser: SkillMDParser) -> Dict[str, Any]:
+    """Skill 执行占位（ReAct 架构中 skill 已通过工具注册表直接调用）。"""
+    return {
+        "skill": name,
+        "success": False,
+        "result": None,
+        "error": f"Skill '{name}' execution via SkillRegistry is deprecated. Use AgentToolRegistry instead.",
+    }
 
 
 class PricingQuickQuoteInput(BaseModel):

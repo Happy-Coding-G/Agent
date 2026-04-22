@@ -4,11 +4,22 @@ name: file_query
 capability_type: skill
 description: 本地文件系统查询 Agent，支持自然语言解析为 glob 模式，具备路径遍历防护与扩展名白名单。
 model: deepseek-chat
+temperature: 0.2
 color: cyan
+max_rounds: 8
+permission_mode: user_scope
+required_roles: []
+
 tools:
   - file_search
   - file_manage
-executor: app.agents.subagents.file_query_agent:query_files
+
+memory:
+  type: episodic
+  namespace: file_query
+  max_context_items: 5
+  max_sidechain_entries: 20
+
 input_schema:
   type: object
   properties:
@@ -60,10 +71,10 @@ examples:
    - 其他：二进制前 1000 字节预览
 6. **二次安全校验**：读取内容前再次验证路径安全
 
-## 编排流程
+## 执行流程
 
 ```
-parse_query(query)
+file_search(query)
   ├─ LLM 解析 → {path, pattern}
   └─ Fallback 正则匹配 → {path, pattern}
   ↓
@@ -86,6 +97,11 @@ read_content(results[:10])
   ↓
 format_results() → [{index, name, path, size, preview, has_content}]
 ```
+
+## 可用工具及使用场景
+
+- **file_search**：根据自然语言查询搜索文件，传入 query
+- **file_manage**：列出目录树、创建/重命名文件夹
 
 ## 质量标准
 

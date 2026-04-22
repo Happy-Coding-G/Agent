@@ -64,26 +64,17 @@ async def test_stream_chat_no_recall_without_session_id(main_agent, mock_memory_
 
 
 @pytest.mark.asyncio
-async def test_stream_chat_writes_assistant_answer(main_agent, mock_memory_service):
-    # Mock QA agent stream to return a result
-    with patch.object(main_agent, "_stream_qa_agent") as mock_qa:
-        mock_qa.return_value = _async_gen([
-            {"type": "token", "data": "hi"},
-            {"type": "result", "data": {"success": True, "agent_type": "qa", "answer": "hi there"}},
-        ])
+async def test_stream_chat_routes_qa_intent(main_agent, mock_memory_service):
+    """Test that QA intent is detected and routed through the graph."""
+    chunks = []
+    async for chunk in main_agent.stream_chat(
+        message="what is this",
+        space_id="space_1",
+        user_id=1,
+        session_id="sess_2",
+    ):
+        chunks.append(chunk)
 
-        chunks = []
-        async for chunk in main_agent.stream_chat(
-            message="what is this",
-            space_id="space_1",
-            user_id=1,
-            session_id="sess_2",
-        ):
-            chunks.append(chunk)
-
-    # Note: actual remember call would happen inside _stream_qa_agent in current impl,
-    # but in this mock path it doesn't. In real flow, QA agent writes its own memory.
-    # This test verifies the state carries session_id correctly.
     intent_chunk = [c for c in chunks if c.get("type") == "intent"]
     assert intent_chunk[0]["data"] == "qa"
 

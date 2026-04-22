@@ -9,7 +9,9 @@ from typing import Dict, Any, Optional
 
 from sqlalchemy import select, func
 
-from app.agents.subagents.trade.state import TradeState
+from typing import Dict, Any
+
+TradeState = Dict[str, Any]
 from app.db.models import DataAssets, TradeOrders, TradeListings, AgentTasks
 
 logger = logging.getLogger(__name__)

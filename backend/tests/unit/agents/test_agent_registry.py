@@ -143,10 +143,11 @@ class TestAgentRegistryIntegration:
             definition = registry.get_definition("trade_workflow")
             assert definition is not None
             assert definition.is_agent()
-            assert definition.max_rounds == 10
+            assert definition.max_rounds == 12
             assert definition.permission_mode == "plan"
             assert definition.memory.namespace == "trade"
             assert "asset_manage" in definition.tools
+            assert "trade_execute" in definition.tools
 
     def test_qa_agent_definition_parsing(self):
         from app.agents.skills.parser import SkillMDParser
@@ -159,9 +160,25 @@ class TestAgentRegistryIntegration:
             definition = registry.get_definition("qa_research")
             assert definition is not None
             assert definition.is_agent()
-            assert definition.temperature == 0.3
+            assert definition.temperature == 0.2
             assert definition.permission_mode == "auto"
             assert definition.memory.namespace == "qa"
+            assert "qa_hybrid_search" in definition.tools
+            assert "qa_generate_answer" in definition.tools
+
+    def test_review_and_asset_workflow_do_not_reference_wrapper_tools(self):
+        from app.agents.skills.parser import SkillMDParser
+
+        parser = SkillMDParser()
+        registry = AgentRegistry(parser)
+
+        review_definition = registry.get_definition("review_workflow")
+        if review_definition:
+            assert "review_document" in review_definition.tools
+
+        asset_definition = registry.get_definition("asset_organize_workflow")
+        if asset_definition:
+            assert "organize_assets" in asset_definition.tools
 
     def test_schema_backward_compatibility(self):
         """Test that get_subagent_schemas works as alias."""

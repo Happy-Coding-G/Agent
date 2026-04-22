@@ -1,7 +1,7 @@
-"""
-TradeAgent Package - LangGraph-based trading agent
-"""
-from app.agents.subagents.trade.agent import TradeAgent
-from app.agents.subagents.trade.state import TradeState
+"""Trade package.
 
-__all__ = ["TradeAgent", "TradeState"]
+Legacy TradeAgent (LangGraph) has been migrated to .md-driven AgentSession.
+Core business logic extracted to trade_tools.py.
+"""
+
+__all__ = []

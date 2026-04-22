@@ -7,16 +7,15 @@ description: |
   支持多路召回、混合排序与来源溯源。
   当用户提问、查询、检索时主动调用。
 model: deepseek-chat
-temperature: 0.3
+temperature: 0.2
 color: blue
-max_rounds: 5
+max_rounds: 15
 permission_mode: auto
 
 tools:
-  - qa_answer
+  - qa_hybrid_search
+  - qa_generate_answer
   - file_search
-  - asset_manage
-  - graph_manage
   - memory_manage
 
 skills:
@@ -27,7 +26,6 @@ memory:
   persist_events: true
   max_sidechain_entries: 500
 
-executor: app.agents.subagents.qa_agent:QAAgent.run
 input_schema:
   type: object
   properties:
@@ -76,38 +74,34 @@ examples:
 ## 核心职责
 
 1. **意图分类**：根据用户查询判断意图类型（factual / explanatory / comparative / general），影响后续检索策略权重。
-2. **向量检索**：通过 pgvector 执行语义相似度搜索，召回 Top-K 相关文档 chunks。
-3. **图谱检索**：通过 Neo4j 执行实体/关系匹配，召回结构化知识证据。
-4. **混合合并**：使用 RRF + 意图加权 + 双源 Boost 融合向量与图谱结果。
-5. **外部重排**：若开启 rerank，调用 Infinity 服务对候选进行二次排序。
-6. **答案生成**：基于 Top-K 证据调用 LLM 生成回答，附带来源引用。
-7. **空结果兜底**：若无可召回内容，返回标准化空结果提示，禁止虚构回答。
+2. **混合检索**：调用 `qa_hybrid_search` 同时执行向量检索（pgvector）和图谱检索（Neo4j），召回相关文档 chunks。
+3. **答案生成**：调用 `qa_generate_answer` 基于检索结果生成回答，附带来源引用。
+4. **空结果兜底**：若无可召回内容，返回标准化空结果提示，禁止虚构回答。
 
-## 编排流程
+## 执行流程
 
 ```
 classify_query(query) → intent
-  ├─ factual      → boost 向量权重 1.15x
-  ├─ explanatory  → 增加上下文长度
-  ├─ comparative  → boost 图谱权重 1.20x
-  └─ general      → 默认权重
-
-parallel(
-  vector_search(query, space_id, top_k×6),
-  graph_search(query, space_id, top_k×4)
-)
   ↓
-hybrid_merge(vector_results, graph_results, intent)
+qa_hybrid_search(query, space_id, top_k)
+  ├─ 向量检索：pgvector 语义相似度搜索
+  ├─ 图谱检索：Neo4j 实体/关系匹配
+  └─ 混合排序：RRF + 加权融合
   ↓
-[可选] rerank_hybrid(query, candidates, top_k)
-  ↓
-if hybrid_results is empty:
-  → no_results_answer()
+if results is empty:
+  → 返回"未找到相关内容"
 else:
-  → generate_answer(query, context, history)
+  → qa_generate_answer(query, contexts)
   ↓
-format_sources(hybrid_results)
+format_sources(results)
 ```
+
+## 可用工具及使用场景
+
+- **qa_hybrid_search**：执行向量+知识图谱混合检索，传入 query、space_id、top_k，返回相关文档片段
+- **qa_generate_answer**：基于 qa_hybrid_search 的 contexts 结果生成最终回答
+- **file_search**：当需要搜索本地文件时使用
+- **memory_manage**：管理会话记忆和长期记忆
 
 ## 质量标准
 
@@ -119,7 +113,6 @@ format_sources(hybrid_results)
 
 ## 输出约束
 
-- 非流式输出：`{success, agent_type, answer, sources, retrieval_debug}`
-- 流式输出：按 `status → sources → token → result` 事件序列输出
+- 返回：`{success, answer, sources, retrieval_debug}`
 - 空结果时回答："抱歉，我没有找到与您问题相关的文档内容。请尝试调整您的问题或先上传相关文档。"
 - 历史对话最多继承最近 4 轮（8 条消息）
