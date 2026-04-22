@@ -319,6 +319,29 @@ class CacheManager:
             await self._redis_cache.delete_pattern("permission", f"{space_id}:*")
         logger.debug(f"Permission cache invalidated for space: {space_id}")
 
+    # ==================== Token 黑名单 ====================
+
+    async def blacklist_token(self, jti: str, ttl_seconds: int) -> None:
+        """将指定 token 的 jti 加入黑名单，直到其过期时间。"""
+        r = await self._get_redis()
+        await r.set(f"token_blacklist:{jti}", "1", ex=ttl_seconds)
+        logger.debug(f"Token blacklisted: jti={jti}")
+
+    async def is_token_blacklisted(self, jti: str) -> bool:
+        """检查 token 的 jti 是否在黑名单中。"""
+        r = await self._get_redis()
+        return await r.exists(f"token_blacklist:{jti}") > 0
+
+    # ==================== Token 黑名单 ====================
+
+    async def blacklist_token(self, jti: str, ttl_seconds: int) -> None:
+        """将 token 的 jti 加入黑名单，持续到其过期时间。"""
+        await self._redis_cache.blacklist_token(jti, ttl_seconds)
+
+    async def is_token_blacklisted(self, jti: str) -> bool:
+        """检查 token 的 jti 是否已吊销。"""
+        return await self._redis_cache.is_token_blacklisted(jti)
+
     # ==================== LLM 客户端缓存 ====================
 
     async def get_llm_client(self, key: str) -> Optional[Any]:

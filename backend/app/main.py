@@ -21,9 +21,23 @@ def create_app() -> FastAPI:
         json_format=settings.LOG_JSON_FORMAT,
     )
 
+    # 关键配置检查 — 空 SECRET_KEY 会导致所有 JWT 令牌完全不安全，拒绝启动
+    if not settings.SECRET_KEY:
+        raise RuntimeError(
+            "SECRET_KEY is not set. "
+            "Generate a strong key with: "
+            "python -c \"import secrets; print(secrets.token_urlsafe(64))\" "
+            "and set it via the SECRET_KEY environment variable."
+        )
+    if len(settings.SECRET_KEY) < 32:
+        raise RuntimeError(
+            "SECRET_KEY is too short (< 32 chars). "
+            "Use a strong random secret of at least 32 characters."
+        )
+
     app = FastAPI(title="dataspace", version="1.0")
 
-    # Emit startup validation warnings
+    # Emit startup validation warnings for non-fatal settings
     for warning in settings.validate_critical_settings():
         logger.warning(warning)
 

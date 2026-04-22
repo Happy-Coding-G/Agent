@@ -8,7 +8,7 @@ Agent 端点 - Agent-First 架构统一入口
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -25,7 +25,7 @@ from app.schemas.schemas import (
 from app.services.base import get_llm_client
 from app.agents.core import MainAgent, AgentType
 from app.core.config import settings
-from app.db.models import AgentTasks, Spaces
+from app.db.models import AgentTasks, Spaces, Users
 from app.services.memory import UnifiedMemoryService
 
 router = APIRouter()
@@ -44,12 +44,19 @@ def create_main_agent(
     )
 
 
-async def resolve_space_id(db: AsyncSession, space_id: Optional[str]) -> int:
+async def resolve_space_id(db: AsyncSession, space_id: Optional[str], user: Users) -> int:
+    """Resolve a space public_id to its internal integer PK, verifying the caller owns it."""
     if not space_id:
         raise HTTPException(status_code=400, detail="space_id is required")
     if space_id.isdigit():
-        return int(space_id)
-    stmt = select(Spaces.id).where(Spaces.public_id == space_id)
+        # Numeric IDs must still belong to the requesting user
+        stmt = select(Spaces.id).where(
+            Spaces.id == int(space_id), Spaces.owner_user_id == user.id
+        )
+    else:
+        stmt = select(Spaces.id).where(
+            Spaces.public_id == space_id, Spaces.owner_user_id == user.id
+        )
     result = await db.execute(stmt)
     db_id = result.scalar_one_or_none()
     if db_id is None:
@@ -125,7 +132,7 @@ async def agent_chat(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    space_id_int = await resolve_space_id(db, req.space_id)
+    space_id_int = await resolve_space_id(db, req.space_id, current_user)
 
     # 初始化 UnifiedMemoryService
     memory = UnifiedMemoryService(
@@ -153,7 +160,7 @@ async def agent_chat(
     )
 
     await _update_agent_task(
-        db, task.public_id, status="running", started_at=datetime.utcnow()
+        db, task.public_id, status="running", started_at=datetime.now(timezone.utc)
     )
 
     try:
@@ -180,7 +187,7 @@ async def agent_chat(
             status="completed",
             output_data=result,
             subagent_result=result,
-            finished_at=datetime.utcnow(),
+            finished_at=datetime.now(timezone.utc),
         )
 
         return AgentChatResponse(
@@ -199,9 +206,9 @@ async def agent_chat(
             task.public_id,
             status="failed",
             error=str(e),
-            finished_at=datetime.utcnow(),
+            finished_at=datetime.now(timezone.utc),
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Agent processing failed")
 
 
 @router.post("/chat/stream")
@@ -212,7 +219,7 @@ async def agent_chat_stream(
 ):
     from app.db.session import AsyncSessionLocal
 
-    space_id_int = await resolve_space_id(db, req.space_id)
+    space_id_int = await resolve_space_id(db, req.space_id, current_user)
 
     # 初始化 UnifiedMemoryService
     memory = UnifiedMemoryService(
@@ -238,7 +245,7 @@ async def agent_chat_stream(
     )
 
     await _update_agent_task(
-        db, task.public_id, status="running", started_at=datetime.utcnow()
+        db, task.public_id, status="running", started_at=datetime.now(timezone.utc)
     )
 
     await db.commit()
@@ -303,7 +310,7 @@ async def agent_chat_stream(
                             status="completed",
                             output_data=final_result,
                             subagent_result=final_result,
-                            finished_at=datetime.utcnow(),
+                            finished_at=datetime.now(timezone.utc),
                         )
                     else:
                         await _update_agent_task(
@@ -312,12 +319,12 @@ async def agent_chat_stream(
                             status="failed",
                             error=final_result.get("error", "Stream error"),
                             output_data=final_result,
-                            finished_at=datetime.utcnow(),
+                            finished_at=datetime.now(timezone.utc),
                         )
 
             except Exception as e:
                 error_result = {"error": str(e)}
-                yield f"data: {json.dumps({'type': 'error', 'data': str(e)}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'data': 'Stream processing failed'}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
 
                 async with AsyncSessionLocal() as error_db:
@@ -326,7 +333,7 @@ async def agent_chat_stream(
                         task_public_id,
                         status="failed",
                         error=str(e),
-                        finished_at=datetime.utcnow(),
+                        finished_at=datetime.now(timezone.utc),
                     )
 
     return StreamingResponse(
@@ -346,7 +353,7 @@ async def create_agent_task(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    space_id = await resolve_space_id(db, req.space_id)
+    space_id = await resolve_space_id(db, req.space_id, current_user)
 
     task = await _create_agent_task_record(
         db=db,
@@ -373,6 +380,10 @@ async def get_task_status(
     task = await _get_agent_task(db, task_id)
 
     if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Verify the requesting user owns this task
+    if task.created_by != current_user.id:
         raise HTTPException(status_code=404, detail="Task not found")
 
     progress = 0

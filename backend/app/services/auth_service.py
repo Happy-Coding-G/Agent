@@ -1,5 +1,6 @@
 import uuid
 import logging
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError, OperationalError
 
@@ -7,6 +8,7 @@ from app.core.cache import cache_manager
 from app.core.errors import ServiceError
 from app.core.security.password import hash_password, verify_password
 from app.core.security.jwt import create_access_token, safe_decode, TokenDecodeError
+from app.core.config import settings
 from app.repositories.user_repo import UserRepository
 from app.repositories.user_auth_repo import UserAuthRepository
 from app.repositories.space_repo import SpaceRepository
@@ -103,6 +105,11 @@ class AuthService:
         if sub is None:
             raise ServiceError(401, "Could not validate credentials")
 
+        # Check token blacklist (supports logout / password change revocation)
+        jti = payload.get("jti")
+        if jti and await cache_manager.is_token_blacklisted(jti):
+            raise ServiceError(401, "Token has been revoked")
+
         try:
             token_data = TokenData(user_id=int(sub), user_key=payload.get("user_key"))
         except ValueError:
@@ -133,3 +140,21 @@ class AuthService:
         logger.debug(f"User loaded from DB and cached: {user_id}")
 
         return user
+
+    async def logout(self, token: str) -> None:
+        """吊销当前 token（加入黑名单，直到 token 自然过期）。"""
+        try:
+            payload = safe_decode(token)
+        except TokenDecodeError:
+            # Already invalid — nothing to revoke
+            return
+
+        jti = payload.get("jti")
+        exp = payload.get("exp")
+        if not jti or not exp:
+            return
+
+        # Calculate remaining TTL so the blacklist entry auto-expires with the token
+        remaining = int(exp) - int(datetime.now(timezone.utc).timestamp())
+        if remaining > 0:
+            await cache_manager.blacklist_token(jti, remaining)
