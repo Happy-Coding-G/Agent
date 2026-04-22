@@ -1,10 +1,10 @@
-"""
-TradeAgent Nodes Package
+"""Trade nodes package.
 
-交易处理节点按职责拆分：
-- common: select_mechanism, format_result
-- agent_first: 直接交易执行节点
+Legacy LangGraph nodes. Core business logic has been extracted to
+trade_tools.py. These modules are kept for reference but no longer
+used by the main agent orchestration.
 """
+
 from typing import Any, Dict
 
 from app.services.asset_service import AssetService
@@ -13,9 +13,9 @@ from app.repositories.trade_repo import TradeRepository
 
 class TradeNodes:
     """
-    交易处理节点集合
+    交易处理节点集合（遗留）。
 
-    组合所有职责节点，提供统一的节点访问接口
+    核心功能已迁移至 trade_tools.py。
     """
 
     def __init__(self, db, skills: Dict[str, Any]):
@@ -24,13 +24,10 @@ class TradeNodes:
         self.repo = TradeRepository(db)
         self.skills = skills
 
-    # common 模块中 graph 仍引用的节点
     from app.agents.subagents.trade.nodes.common import (
-        select_mechanism,
         format_result,
     )
 
-    # 直接交易节点
     from app.agents.subagents.trade.nodes.agent_first import (
         normalize_goal,
         load_user_config,

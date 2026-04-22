@@ -3,7 +3,6 @@ skill_id: asset_cluster_prompt
 name: 资产聚类提示词
 capability_type: prompt
 description: 根据资产的特征将其分组聚类，并生成整理报告
-executor: null
 input_schema:
   type: object
   properties: {}

@@ -47,12 +47,12 @@ class AgentToolRegistry:
             markdown_tools,
             graph_tools,
             asset_tools,
-            qa_tools,
-            review_tools,
             trade_tools,
             memory_tools,
             user_config_tools,
             token_usage_tools,
+            qa_tools,
+            review_tools,
         )
 
         builders = [
@@ -61,12 +61,12 @@ class AgentToolRegistry:
             markdown_tools.build_tools,
             graph_tools.build_tools,
             asset_tools.build_tools,
-            qa_tools.build_tools,
-            review_tools.build_tools,
             trade_tools.build_tools,
             memory_tools.build_tools,
             user_config_tools.build_tools,
             token_usage_tools.build_tools,
+            qa_tools.build_tools,
+            review_tools.build_tools,
         ]
 
         for builder in builders:

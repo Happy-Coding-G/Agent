@@ -9,13 +9,12 @@ description: |
 model: deepseek-chat
 temperature: 0.1
 color: green
-max_rounds: 8
+max_rounds: 10
 permission_mode: notify
 
 tools:
   - review_document
-  - asset_manage
-  - markdown_manage
+  - file_search
   - memory_manage
 
 memory:
@@ -23,7 +22,6 @@ memory:
   persist_events: true
   max_sidechain_entries: 300
 
-executor: app.agents.subagents.review_agent:ReviewAgent.run
 input_schema:
   type: object
   properties:
@@ -74,29 +72,28 @@ examples:
    - 标题非空
    - Markdown 结构包含标题（`# `）
 5. **综合裁决**：
-   - 质量分数 < 0.5 或存在合规问题 → 触发 rework
-   - 完整性问题 > 2 个 → 触发 rework
-   - rework 超过 3 次 → 升级为 `manual_review`
-6. **结果定稿**：输出 `approved` / `manual_review` / `rejected` 最终状态
+   - 质量分数 < 0.5 或存在合规问题 → manual_review
+   - 完整性问题 > 2 个 → manual_review
+   - 其他情况 → approved
 
-## 编排流程
+## 执行流程
 
 ```
-load_document(doc_id) → doc.title, doc.markdown_text
+review_document(doc_id, review_type)
+  ├─ 质量检查 → quality_score, quality_issues
+  ├─ 合规检查 → compliance_issues, passed_compliance
+  └─ 完整性检查 → completeness_issues, passed_completeness
   ↓
-quality_check(content) → quality_score, quality_issues
+综合裁决 → final_status (approved / manual_review / rejected)
   ↓
-compliance_check(content) → compliance_issues, passed_compliance
-  ↓
-completeness_check(title, content) → completeness_issues, passed_completeness
-  ↓
-judge_result(quality_score, compliance_issues, completeness_issues)
-  ├─ 需要 rework 且 rework_count < 3 → rework_count++ → 回到 quality_check
-  ├─ 需要 rework 且 rework_count >= 3 → final_status = "manual_review"
-  └─ 无需 rework → final_status = "approved"
-  ↓
-finalize() → 输出审查报告
+输出审查报告
 ```
+
+## 可用工具及使用场景
+
+- **review_document**：执行完整的文档三维审查，传入 doc_id 和 review_type
+- **file_search**：搜索相关参考文档
+- **memory_manage**：记录审查历史
 
 ## 质量标准
 
@@ -105,7 +102,6 @@ finalize() → 输出审查报告
   - 任一合规项严重违规时，总分不得超过 59 分（不通过）。
 - **完整性维度**：覆盖所需章节、不缺少关键图表或数据。权重 30%。
 - **评分要求**：评分需给出具体问题和改进建议，不允许仅给出分数。
-- **自动降级**：超过 rework 上限（3 次）自动转人工审核，避免无限循环。
 
 ## 输出约束
 

@@ -5,7 +5,7 @@ capability_type: subagent
 description: 为无法一次性解决的复杂任务动态生成 subagent 模板
 tools:
   - memory_manage
-executor: app.agents.subagents.template:DynamicWorkflowSubAgent.run
+  - markdown_manage
 input_schema:
   type: object
   properties:

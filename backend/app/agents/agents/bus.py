@@ -1,5 +1,4 @@
-"""Agent 间消息总线。
-
+"""
 基于 Redis Pub/Sub 实现轻量级消息通信。
 每个 Agent 实例可以：
 - publish：向特定 topic 发送消息

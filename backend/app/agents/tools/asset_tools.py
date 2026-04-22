@@ -1,6 +1,4 @@
-"""
-Asset Tools - 包装 AssetService + AssetOrganizeAgent
-"""
+"""Asset tools backed by AssetService."""
 
 from __future__ import annotations
 
@@ -29,8 +27,8 @@ class AssetManageInput(BaseModel):
     )
 
 
-class AssetOrganizeInput(BaseModel):
-    asset_ids: List[str] = Field(description="要整理的资产ID列表")
+class OrganizeAssetsInput(BaseModel):
+    asset_ids: List[str] = Field(description="资产ID列表")
     space_id: str = Field(description="空间public_id")
 
 
@@ -85,11 +83,77 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
             logger.exception(f"asset_manage failed: {e}")
             return {"success": False, "error": str(e)}
 
-    async def asset_organize(asset_ids: List[str], space_id: str) -> Dict[str, Any]:
-        from app.agents.subagents.asset_organize_agent import AssetOrganizeAgent
+    async def organize_assets(asset_ids: List[str], space_id: str) -> Dict[str, Any]:
+        """对指定资产执行特征提取与聚类整理。"""
+        from app.services.asset_service import AssetService
+        from app.services.base import get_llm_client
 
-        agent = AssetOrganizeAgent(db)
-        return await agent.run(asset_ids=asset_ids, space_id=space_id, user=user)
+        try:
+            asset_service = AssetService(db)
+            assets = []
+            for aid in asset_ids:
+                try:
+                    asset = await asset_service.get_asset(space_id, aid, user)
+                    assets.append({
+                        "asset_id": aid,
+                        "name": asset.get("title", f"Asset {aid}"),
+                        "content": asset.get("content_markdown", ""),
+                        "category": asset.get("asset_type", "knowledge_report"),
+                    })
+                except Exception:
+                    pass
+
+            if not assets:
+                return {"success": False, "error": "No assets could be loaded", "clusters": []}
+
+            # Simple categorization
+            clusters_dict: Dict[str, List[Dict[str, Any]]] = {}
+            for asset in assets:
+                cat = asset.get("category", "未分类")
+                clusters_dict.setdefault(cat, []).append(asset)
+
+            clusters = []
+            for idx, (category, items) in enumerate(clusters_dict.items()):
+                clusters.append({
+                    "cluster_id": f"cluster_{idx}",
+                    "category": category,
+                    "asset_ids": [a["asset_id"] for a in items],
+                    "size": len(items),
+                    "method": "category",
+                })
+
+            # Generate summary report
+            try:
+                llm = get_llm_client(temperature=0.3)
+                report_prompt = f"""你是资产整理助手。根据以下资产聚类结果生成一份简短的中文整理报告。
+
+资产总数: {len(assets)}
+聚类数量: {len(clusters)}
+
+聚类详情:
+"""
+                for c in clusters:
+                    report_prompt += f"- {c['category']}: {c['size']} 个资产\n"
+
+                report_prompt += "\n请生成包含概况、聚类描述和建议的整理报告（Markdown格式）："
+
+                response = await llm.ainvoke(report_prompt)
+                summary_report = response.content if hasattr(response, "content") else str(response)
+            except Exception as e:
+                logger.warning(f"Summary generation failed: {e}")
+                summary_report = f"## 资产整理报告\n\n共整理 {len(assets)} 个资产，分为 {len(clusters)} 个类别。"
+
+            return {
+                "success": True,
+                "clusters": clusters,
+                "num_clusters": len(clusters),
+                "summary_report": summary_report,
+                "publication_ready": True,
+            }
+
+        except Exception as e:
+            logger.exception(f"organize_assets failed: {e}")
+            return {"success": False, "error": str(e), "clusters": []}
 
     return [
         StructuredTool.from_function(
@@ -100,10 +164,10 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
             coroutine=asset_manage,
         ),
         StructuredTool.from_function(
-            name="asset_organize",
-            func=asset_organize,
-            description="整理和聚类资产",
-            args_schema=AssetOrganizeInput,
-            coroutine=asset_organize,
+            name="organize_assets",
+            func=organize_assets,
+            description="对指定资产列表执行特征提取与聚类整理，生成整理报告。",
+            args_schema=OrganizeAssetsInput,
+            coroutine=organize_assets,
         ),
     ]

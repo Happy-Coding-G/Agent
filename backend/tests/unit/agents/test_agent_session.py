@@ -325,8 +325,9 @@ class TestAgentSession:
         assert result.error == "max_rounds_exceeded"
         assert result.rounds_used == 3
 
-    def test_legacy_result_to_summary(self):
-        """Test legacy result conversion."""
+    @pytest.mark.asyncio
+    async def test_react_result_formatting(self):
+        """Test ReAct result formatting."""
         definition = self._make_definition()
         session = AgentSession(
             agent_definition=definition,
@@ -334,18 +335,6 @@ class TestAgentSession:
             user_id=1,
         )
 
-        # QA result
-        assert session._legacy_result_to_summary({"answer": "The answer"}) == "The answer"
-
-        # Review result
-        assert "approved" in session._legacy_result_to_summary({"final_status": "approved"})
-
-        # Trade result
-        assert "交易执行完成" in session._legacy_result_to_summary({
-            "status": "settled", "plan_id": "p1"
-        })
-
-        # Asset organize result
-        assert "资产整理完成" in session._legacy_result_to_summary({
-            "clusters": [], "num_clusters": 5
-        })
+        # Direct answer result
+        summary = await session._summarize_result({"answer": "The answer"})
+        assert "The answer" in summary

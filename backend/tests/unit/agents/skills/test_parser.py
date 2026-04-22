@@ -136,7 +136,9 @@ class TestSkillMDParserMetadataOnly:
 
         assert parser._metadata_loaded is True
         assert parser._loaded is False
-        assert len(parser._documents) == 2
+        # Filter to only test docs (parser may also load default dirs)
+        test_docs = {k: v for k, v in parser._documents.items() if k in ("test_skill", "test_agent")}
+        assert len(test_docs) == 2
 
         doc = parser._documents["test_skill"]
         assert doc.name == "Test Skill"
@@ -165,18 +167,23 @@ class TestSkillMDParserMetadataOnly:
         parser = SkillMDParser(docs_dirs=[temp_docs_dir])
         docs = parser.list_metadata()
 
-        assert len(docs) == 2
-        assert all(doc.raw_markdown == "" for doc in docs)
+        # Filter to only test docs
+        test_docs = [d for d in docs if d.skill_id in ("test_skill", "test_agent")]
+        assert len(test_docs) == 2
+        assert all(doc.raw_markdown == "" for doc in test_docs)
 
     def test_list_metadata_filter_by_type(self, temp_docs_dir):
         parser = SkillMDParser(docs_dirs=[temp_docs_dir])
         skill_docs = parser.list_metadata(capability_type="skill")
         agent_docs = parser.list_metadata(capability_type="agent")
 
-        assert len(skill_docs) == 1
-        assert skill_docs[0].skill_id == "test_skill"
-        assert len(agent_docs) == 1
-        assert agent_docs[0].skill_id == "test_agent"
+        # Filter to only test docs
+        test_skill_docs = [d for d in skill_docs if d.skill_id == "test_skill"]
+        test_agent_docs = [d for d in agent_docs if d.skill_id == "test_agent"]
+        assert len(test_skill_docs) == 1
+        assert test_skill_docs[0].skill_id == "test_skill"
+        assert len(test_agent_docs) == 1
+        assert test_agent_docs[0].skill_id == "test_agent"
 
     def test_get_document_triggers_full_load(self, temp_docs_dir):
         parser = SkillMDParser(docs_dirs=[temp_docs_dir])
@@ -197,11 +204,14 @@ class TestSkillMDParserMetadataOnly:
         l1_schemas = parser.get_schemas(level="l1")
         l2_schemas = parser.get_schemas(level="l2")
 
-        assert len(l1_schemas) == len(l2_schemas) == 2
+        # Filter to only test schemas
+        test_l1 = [s for s in l1_schemas if s.get("name") in ("test_skill", "test_agent")]
+        test_l2 = [s for s in l2_schemas if s.get("name") in ("test_skill", "test_agent")]
+        assert len(test_l1) == len(test_l2) == 2
 
         # L1 schemas should be smaller
-        l1_skill = next(s for s in l1_schemas if s["name"] == "test_skill")
-        l2_skill = next(s for s in l2_schemas if s["name"] == "test_skill")
+        l1_skill = next(s for s in test_l1 if s["name"] == "test_skill")
+        l2_skill = next(s for s in test_l2 if s["name"] == "test_skill")
 
         assert "workflow_steps" not in l1_skill
         assert "suitable_scenarios" not in l1_skill
@@ -215,8 +225,10 @@ class TestSkillMDParserMetadataOnly:
         parser = SkillMDParser(docs_dirs=[temp_docs_dir])
         docs = parser.list_documents()
 
-        assert len(docs) == 2
-        assert all(doc.raw_markdown != "" for doc in docs)
+        # Filter to only test docs
+        test_docs = [d for d in docs if d.skill_id in ("test_skill", "test_agent")]
+        assert len(test_docs) == 2
+        assert all(doc.raw_markdown != "" for doc in test_docs)
         assert parser._loaded is True
 
     def test_parser_backward_compat_default(self, temp_docs_dir):
