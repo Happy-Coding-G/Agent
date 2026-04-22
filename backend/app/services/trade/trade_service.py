@@ -361,9 +361,6 @@ class TradeService:
                 "holding": self._format_holding_response(holding),
             }
 
-        except ServiceError:
-            raise
-
         except IntegrityError as e:
             # 检查是否是重复购买的唯一约束冲突
             error_str = str(e).lower()

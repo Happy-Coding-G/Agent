@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: ["main", "master", "develop"]
 
+# Restrict the GITHUB_TOKEN to the minimum required permissions
+permissions:
+  contents: read
+
 jobs:
   # ---------------------------------------------------------------------------
   # Backend: lint + typecheck + unit tests
@@ -13,6 +17,8 @@ jobs:
   backend:
     name: Backend (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         python-version: ["3.11"]
@@ -61,6 +67,8 @@ jobs:
   frontend:
     name: Frontend (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         node-version: ["20"]
