@@ -17,7 +17,6 @@ from sqlalchemy import select, and_, func
 
 from app.db.models import (
     BlackboardEvents,
-    NegotiationSessions,
 )
 from app.core.errors import ServiceError
 
@@ -217,23 +216,7 @@ class NegotiationEventStore:
         payload: Dict[str, Any],
     ) -> None:
         """验证事件有效性"""
-        # INITIATE 事件是创建会话的，不需要检查会话是否存在
-        if event_type != "INITIATE":
-            # 1. 检查会话存在
-            if session_type == "negotiation":
-                stmt = select(NegotiationSessions).where(
-                    NegotiationSessions.negotiation_id == session_id
-                )
-                result = await self.db.execute(stmt)
-                session = result.scalar_one_or_none()
-
-                if not session:
-                    raise ServiceError(404, "Negotiation session not found")
-
-                if session.status in ["completed", "cancelled", "agreed"]:
-                    raise ServiceError(400, f"Negotiation already {session.status}")
-
-        # 2. 验证事件类型
+        # 1. 验证事件类型
         valid_types = [
             # 传统交易事件
             "INITIATE",  # 买方发起协商

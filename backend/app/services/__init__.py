@@ -27,13 +27,11 @@ _EXPORTS = {
     "SpaceService": ("app.services.space", "SpaceService"),
     "TradeService": ("app.services.trade", "TradeService"),
     "TradeAgentService": ("app.services.trade", "TradeAgentService"),
-    "TradeNegotiationService": ("app.services.trade", "TradeNegotiationService"),
     "UnifiedTradeService": ("app.services.trade", "UnifiedTradeService"),
     "TradeActionService": ("app.services.trade.trade_action_service", "TradeActionService"),
     "TradeAction": ("app.services.trade.trade_action_service", "TradeAction"),
     "TradeActionResult": ("app.services.trade.trade_action_service", "TradeActionResult"),
     "execute_trade_action": ("app.services.trade.trade_action_service", "execute_trade_action"),
-    "SimpleNegotiationService": ("app.services.trade.simple_negotiation_service", "SimpleNegotiationService"),
     "TradeBatchOperationsService": ("app.services.trade.batch_operations_service", "TradeBatchOperationsService"),
     "BatchOperationResult": ("app.services.trade.batch_operations_service", "BatchOperationResult"),
     "RightsEnforcementEngine": ("app.services.data_rights", "RightsEnforcementEngine"),
@@ -53,7 +51,6 @@ def __getattr__(name: str):
 # Trade services
 from .trade import (
     TradeAgentService,
-    TradeNegotiationService,
     TradeService,
 )
 
@@ -73,5 +70,4 @@ __all__ = [
     # Trade
     "TradeService",
     "TradeAgentService",
-    "TradeNegotiationService",
 ]

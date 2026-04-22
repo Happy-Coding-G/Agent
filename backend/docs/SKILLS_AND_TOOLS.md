@@ -8,11 +8,11 @@
 
 | 层级 | 定位 | 典型执行时间 | 示例 |
 |------|------|-------------|------|
-| **Tools** | 显式原子操作，直接调用 Service | 毫秒 ~ 秒级 | 文件搜索、空间切换 |
+| **Tools** | 显式原子操作，直接调用 Service 或原子查询组件 | 毫秒 ~ 秒级 | 文件搜索、空间切换 |
 | **Skills** | 轻量工作流，由 SKILL.md 定义 | 秒级 | 快速定价、市场概览 |
-| **SubAgents** | 复杂多步工作流，可能异步执行 | 秒 ~ 分钟级 | RAG问答、交易协商 |
+| **SubAgents** | 复杂多步工作流，可能异步执行 | 秒 ~ 分钟级 | RAG问答、交易 |
 
-所有 Tool 内部直接调用 `services/` 或 `subagents/`，**不走 HTTP**。
+Tools 只承载原子能力；QA、文档审查、交易、资产整理等复杂流程统一建模为 Agent，**不走 HTTP**。
 
 ---
 
@@ -30,12 +30,9 @@ Tools 通过 `AgentToolRegistry` 统一注册。注册时接收 `(db, user, spac
 | `markdown_manage` | `markdown_tools.py` | 列出/读取 Markdown 文档 |
 | `graph_manage` | `graph_tools.py` | 获取/更新知识图谱节点和边 |
 | `asset_manage` | `asset_tools.py` | 列出、获取、生成数字资产 |
-| `asset_organize` | `asset_tools.py` | 资产聚类整理 |
-| `qa_answer` | `qa_tools.py` | RAG 问答（向量+图谱） |
-| `review_document` | `review_tools.py` | 文档质量/合规审查 |
-| `trade_goal` | `trade_tools.py` | 执行交易目标（买卖/询价） |
+| `create_listing` | `trade_tools.py` | 创建交易挂单 |
 | `memory_manage` | `memory_tools.py` | 会话、偏好、长期记忆管理 |
-| `user_config_manage` | `user_config_tools.py` | LLM配置、交易协商策略配置 |
+| `user_config_manage` | `user_config_tools.py` | LLM配置、交易偏好配置 |
 | `token_usage_query` | `token_usage_tools.py` | Token用量查询统计 |
 | `process_document` | `ingest_pipeline.py` | 文档处理（通过上传 API 触发 LCEL 摄入链路） |
 
@@ -76,39 +73,18 @@ Tools 通过 `AgentToolRegistry` 统一注册。注册时接收 `(db, user, spac
 - `action=update_edge`：更新关系类型和描述
 - `action=delete_edge`：删除指定关系边
 
-#### `asset_manage` / `asset_organize`
+#### `asset_manage`
 
 - **asset_manage**：包装 `AssetService`
   - `action=list`：列出空间资产
   - `action=get`：获取单个资产详情
   - `action=generate`：根据 prompt 生成新资产
 
-- **asset_organize**：包装 `AssetOrganizeAgent`
-  - 输入：`asset_ids: List[str]`
-  - 输出：聚类结果和摘要报告
+#### `create_listing`
 
-#### `qa_answer`
-
-- 包装 `QAAgent`
-- 输入：`query`, `space_id`, `top_k=5`
-- 执行流程：向量检索 -> 图谱检索 -> 混合重排 -> LLM 生成带引用的回答
-
-#### `review_document`
-
-- 包装 `ReviewAgent`
-- 输入：`doc_id`, `review_type="standard"`
-- 输出：审查评分、问题列表、改进建议
-
-#### `trade_goal`
-
-- 包装 `TradeAgent`
-- 输入：`intent` (`sell_asset` / `buy_asset` / `price_inquiry` / `market_analysis`), `asset_id`, `listing_id`, `price`, `space_id`
-- 执行流程：
-  1. 标准化意图
-  2. 评估市场/风险上下文
-  3. 选择协商机制（fixed_price / auction / bilateral / direct）
-  4. 创建/推进 `NegotiationSession`
-  5. 返回交易结果或协商状态
+- 包装 `TradeService`
+- 输入：`asset_id`, `price`, `rights_type`, `license_term`, `description`, `tags`, `is_public`
+- 输出：创建后的挂单信息
 
 #### `memory_manage`
 
@@ -127,7 +103,7 @@ Tools 通过 `AgentToolRegistry` 统一注册。注册时接收 `(db, user, spac
 - 包装 `UserAgentService`
 - `action=get_config`：读取用户 LLM + 交易配置
 - `action=update_llm`：更新模型、温度、最大Token等
-- `action=update_trade`：更新自动协商、利润率、预算比例
+- `action=update_trade`：更新利润率、预算比例
 - `action=reset_config`：重置为系统默认
 - `action=test_llm`：测试 LLM 连通性
 
@@ -184,7 +160,7 @@ output_summary: 返回 fair_value、recommended price 和价格区间
 | `lineage_impact` | 血缘影响分析 | `LineageSkill.get_impact` | 分析数据资产变更对下游的影响范围 |
 | `market_overview` | 市场概览 | `MarketSkill.get_overview` | 返回当前市场的总体统计信息 |
 | `market_trend` | 市场趋势 | `MarketSkill.get_trend` | 按数据类型和天数统计市场趋势 |
-| `privacy_protocol` | 隐私协议协商 | `PrivacySkill.generate_protocol` | 根据资产敏感度和要求生成隐私计算协议 |
+| `privacy_protocol` | 隐私协议 | `PrivacySkill.generate_protocol` | 根据资产敏感度和要求生成隐私计算协议 |
 | `audit_report` | 审计报告 | `AuditSkill.generate_report` | 为指定交易生成审计报告 |
 
 ### 3.3 执行机制
@@ -211,7 +187,7 @@ SubAgents 与 Skills 使用相同的 `SKILL.md` 格式，只是 `capability_type
 | `qa_research` | 知识检索问答 | `QAAgent.run` | 多步骤知识检索与溯源回答（向量+图谱混合） |
 | `review_workflow` | 文档审查工作流 | `ReviewAgent.run` | 完整的文档质量/合规性审查流程 |
 | `asset_organize_workflow` | 资产整理工作流 | `AssetOrganizeAgent.run` | 资产特征提取、聚类、报告生成 |
-| `trade_workflow` | 交易协商工作流 | `TradeAgent.run` | 复杂交易目标执行、协商推进、结算 |
+| `trade_workflow` | 交易工作流 | `TradeAgent.run` | 复杂交易目标执行、上架、购买、结算 |
 | `dynamic_workflow` | 动态工作流 | `DynamicWorkflowAgent.run` | 根据用户目标动态生成并执行多步任务模板 |
 
 ### 4.2 参数映射
@@ -372,10 +348,11 @@ LLM 输出 JSON `decision`：
 | Markdown 读取 | `markdown_manage` | — | — |
 | 知识图谱操作 | `graph_manage` | — | — |
 | 资产 CRUD | `asset_manage` | — | — |
-| 资产聚类 | `asset_organize` | — | `asset_organize_workflow` |
-| RAG 问答 | `qa_answer` | — | `qa_research` |
-| 文档审查 | `review_document` | — | `review_workflow` |
-| 交易目标 | `trade_goal` | — | `trade_workflow` |
+| 创建挂单 | `create_listing` | — | — |
+| 资产聚类 | — | — | `asset_organize_workflow` |
+| RAG 问答 | — | — | `qa_research` |
+| 文档审查 | — | — | `review_workflow` |
+| 交易目标 | — | — | `trade_workflow` |
 | 快速定价 | — | `pricing_quick_quote` | — |
 | 血缘分析 | — | `lineage_summary` / `lineage_impact` | — |
 | 市场分析 | — | `market_overview` / `market_trend` | — |
