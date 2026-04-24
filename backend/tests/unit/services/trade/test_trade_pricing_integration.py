@@ -175,5 +175,5 @@ class TestTradePricingIntegration:
 
             mock_svc.record_lineage.assert_awaited_once()
             call_kwargs = mock_svc.record_lineage.await_args.kwargs
-            assert call_kwargs["current_entity_id"] == "ast_1"
-            assert call_kwargs["relationship"] == "transformed"
+            assert call_kwargs["current_entity_id"] == "rt_123"
+            assert call_kwargs["relationship"] == "rights_assigned"

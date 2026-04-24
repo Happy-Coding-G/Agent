@@ -14,12 +14,10 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-# Default directories: skills/docs (legacy flat .md) + subagents/docs (subagent definitions)
-_SKILLS_DIR = Path(__file__).with_name("docs")
+# Skill definitions live in packages/; agent definitions live in subagents/docs.
 _SUBAGENTS_DIR = Path(__file__).resolve().parent.parent / "subagents" / "docs"
-# New: Claude Code style skill packages (folders named after capability)
 _SKILLS_PACKAGES_DIR = Path(__file__).resolve().parent / "packages"
-SKILLS_DOCS_DIRS = [_SKILLS_DIR, _SUBAGENTS_DIR]
+SKILLS_DOCS_DIRS = [_SUBAGENTS_DIR]
 
 
 @dataclass
@@ -142,7 +140,7 @@ class SkillMDParser:
 
         total_loaded = 0
 
-        # 1) Legacy flat .md files in docs_dirs (backward compatible)
+        # 1) Markdown definition files from configured docs directories
         for docs_dir in self.docs_dirs:
             if not docs_dir.exists():
                 logger.debug(f"SKILL.md docs directory not found: {docs_dir}")
@@ -157,7 +155,7 @@ class SkillMDParser:
                 except Exception as e:
                     logger.warning(f"Failed to parse SKILL.md {md_path}: {e}")
 
-        # 2) Claude Code style skill packages: packages/{skill_name}/Skill.md
+        # 2) Skill packages: packages/{skill_name}/Skill.md
         if _SKILLS_PACKAGES_DIR.exists():
             for pkg_dir in sorted(_SKILLS_PACKAGES_DIR.iterdir()):
                 if not pkg_dir.is_dir():

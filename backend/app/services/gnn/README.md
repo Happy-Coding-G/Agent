@@ -115,13 +115,13 @@ features = await extractor.extract_features("asset_001")
 # }
 ```
 
-## 与PricingSkill集成
+## 与AssetLineagePricingService集成
 
 ```python
-from app.services.skills.pricing_skill import PricingSkill
+from app.services.asset_lineage_pricing_service import AssetLineagePricingService
 from app.services.gnn.inference.embedder import AssetGraphEmbedder
 
-class EnhancedPricingSkill(PricingSkill):
+class EnhancedAssetLineagePricingService(AssetLineagePricingService):
     def __init__(self, db, graph_embedder: AssetGraphEmbedder):
         super().__init__(db)
         self.graph_embedder = graph_embedder

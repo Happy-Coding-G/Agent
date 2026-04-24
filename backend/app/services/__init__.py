@@ -47,27 +47,7 @@ __all__ = list(_EXPORTS)
 def __getattr__(name: str):
     if name not in _EXPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-# Trade services
-from .trade import (
-    TradeAgentService,
-    TradeService,
-)
-
-__all__ = [
-    # Base
-    "SpaceAwareService",
-    # Domain
-    "AssetService",
-    "AuthService",
-    "CollaborationService",
-    "FileService",
-    "KnowledgeGraphService",
-    "IngestService",
-    "AssetLineagePricingService",
-    "MarkdownService",
-    "SpaceService",
-    # Trade
-    "TradeService",
-    "TradeAgentService",
-]
+    module_name, attr_name = _EXPORTS[name]
+    value = getattr(import_module(module_name), attr_name)
+    globals()[name] = value
+    return value

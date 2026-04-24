@@ -39,6 +39,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _ensure_asset_lineage(entity_type: DataLineageType) -> None:
+    if entity_type != DataLineageType.ASSET:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only asset lineage is supported",
+        )
+
+
 # ============================================================================
 # 数据血缘API
 # ============================================================================
@@ -58,6 +66,7 @@ async def get_lineage(
     current_user: Users = Depends(get_current_user),
 ):
     """获取数据血缘"""
+    _ensure_asset_lineage(entity_type)
     service = AssetLineagePricingService(db)
 
     result = {}
@@ -99,6 +108,7 @@ async def get_lineage_graph(
     current_user: Users = Depends(get_current_user),
 ):
     """获取血缘图数据"""
+    _ensure_asset_lineage(entity_type)
     service = AssetLineagePricingService(db)
     return await service.get_lineage_graph(entity_id, max_depth)
 
@@ -117,6 +127,7 @@ async def analyze_impact(
     current_user: Users = Depends(get_current_user),
 ):
     """影响分析"""
+    _ensure_asset_lineage(entity_type)
     service = AssetLineagePricingService(db)
     return await service.get_impact_report(entity_id, max_depth)
 

@@ -1,79 +1,44 @@
-"""
-Trade Services Package
+"""Trade services package with lazy exports."""
 
-数据权益交易服务（仅支持直接交易）
-"""
+from importlib import import_module
 
-from app.services.trade.trade_agent_service import TradeAgentService
-from app.services.trade.trade_service import TradeService
+_EXPORTS = {
+    "TradeService": ("app.services.trade.trade_service", "TradeService"),
+    "TradeAgentService": ("app.services.trade.trade_agent_service", "TradeAgentService"),
+    "UnifiedTradeService": ("app.services.trade.unified_trade_service", "UnifiedTradeService"),
+    "DataRightsService": ("app.services.trade.data_rights_service", "DataRightsService"),
+    "DataAssetRegisterPayload": ("app.services.trade.data_rights_events", "DataAssetRegisterPayload"),
+    "DataRightsPayload": ("app.services.trade.data_rights_events", "DataRightsPayload"),
+    "DataRightsCounterPayload": ("app.services.trade.data_rights_events", "DataRightsCounterPayload"),
+    "ComputationAgreementPayload": ("app.services.trade.data_rights_events", "ComputationAgreementPayload"),
+    "DataAccessAuditPayload": ("app.services.trade.data_rights_events", "DataAccessAuditPayload"),
+    "PolicyViolationPayload": ("app.services.trade.data_rights_events", "PolicyViolationPayload"),
+    "RightsRevokePayload": ("app.services.trade.data_rights_events", "RightsRevokePayload"),
+    "DataRightsType": ("app.services.trade.data_rights_events", "DataRightsType"),
+    "ComputationMethod": ("app.services.trade.data_rights_events", "ComputationMethod"),
+    "DataSensitivityLevel": ("app.services.trade.data_rights_events", "DataSensitivityLevel"),
+    "AnonymizationLevel": ("app.services.trade.data_rights_events", "AnonymizationLevel"),
+    "QualityMetrics": ("app.services.trade.data_rights_events", "QualityMetrics"),
+    "PrivacyComputationNegotiator": (
+        "app.services.trade.privacy_computation",
+        "PrivacyComputationNegotiator",
+    ),
+    "AnonymizationService": ("app.services.trade.privacy_computation", "AnonymizationService"),
+    "ContinuousAuditService": ("app.services.trade.continuous_audit", "ContinuousAuditService"),
+    "ViolationType": ("app.services.trade.continuous_audit", "ViolationType"),
+    "ViolationSeverity": ("app.services.trade.continuous_audit", "ViolationSeverity"),
+    "DataAssetKGIntegration": ("app.services.trade.kg_integration", "DataAssetKGIntegration"),
+    "BuyerProfilingService": ("app.services.trade.kg_integration", "BuyerProfilingService"),
+    "RecommendationEngine": ("app.services.trade.kg_integration", "RecommendationEngine"),
+}
 
-# Phase 1: 数据权益基础
-from app.services.trade.data_rights_events import (
-    DataAssetRegisterPayload,
-    DataRightsPayload,
-    DataRightsCounterPayload,
-    ComputationAgreementPayload,
-    DataAccessAuditPayload,
-    PolicyViolationPayload,
-    RightsRevokePayload,
-    DataRightsType,
-    ComputationMethod,
-    DataSensitivityLevel,
-    AnonymizationLevel,
-    QualityMetrics,
-)
-from app.services.trade.data_rights_service import DataRightsService
+__all__ = list(_EXPORTS)
 
-# Phase 2: 高级功能
-from app.services.trade.privacy_computation import (
-    PrivacyComputationNegotiator,
-    AnonymizationService,
-)
-from app.services.trade.continuous_audit import (
-    ContinuousAuditService,
-    ViolationType,
-    ViolationSeverity,
-)
-from app.services.trade.kg_integration import (
-    DataAssetKGIntegration,
-    BuyerProfilingService,
-    RecommendationEngine,
-)
 
-from app.services.trade.unified_trade_service import UnifiedTradeService
-
-__all__ = [
-    # 核心服务
-    "TradeService",
-    "TradeAgentService",
-    "UnifiedTradeService",
-    "DataRightsService",
-
-    # 数据权益事件
-    "DataAssetRegisterPayload",
-    "DataRightsPayload",
-    "DataRightsCounterPayload",
-    "ComputationAgreementPayload",
-    "DataAccessAuditPayload",
-    "PolicyViolationPayload",
-    "RightsRevokePayload",
-    "DataRightsType",
-    "ComputationMethod",
-    "DataSensitivityLevel",
-    "AnonymizationLevel",
-    "QualityMetrics",
-
-    # Phase 2: 隐私计算
-    "PrivacyComputationNegotiator",
-    "AnonymizationService",
-
-    # Phase 2: 审计
-    "ContinuousAuditService",
-    "ViolationType",
-    "ViolationSeverity",
-
-    # Phase 2: 知识图谱集成
-    "DataAssetKGIntegration",
-    "BuyerProfilingService",
-    "RecommendationEngine",
-]
+def __getattr__(name: str):
+    if name not in _EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attr_name = _EXPORTS[name]
+    value = getattr(import_module(module_name), attr_name)
+    globals()[name] = value
+    return value

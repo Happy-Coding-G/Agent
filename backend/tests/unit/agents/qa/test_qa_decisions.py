@@ -24,6 +24,9 @@ from app.agents.tools.qa_tools import (
     _extract_query_terms,
     _hybrid_merge,
     _compute_hybrid_score,
+    _to_candidate,
+    _assess_overall_confidence,
+    _assess_single_confidence,
 )
 from app.agents.core.main_agent import MainAgent, AgentType
 from app.agents.core.state import MainAgentState, TaskStatus
@@ -793,3 +796,155 @@ class TestDecisionObservability:
         assert result.rounds_used >= 1
         assert result.correlation_id is not None
         assert result.sidechain_id == "sess_1:test"
+
+
+# ============================================================================
+# 7. Three-Layer Retrieval Decision
+# ============================================================================
+
+class TestThreeLayerRetrievalDecision:
+    """Test vector_search / graph_search / rerank decision flow."""
+
+    def test_vector_candidate_format(self):
+        """Decision: vector candidate follows unified format."""
+        item = {
+            "chunk_id": "c1",
+            "doc_id": "d1",
+            "chunk_index": 0,
+            "doc_title": "Doc A",
+            "section_path": "S1",
+            "content": "vector content",
+            "score": 0.82,
+        }
+        cand = _to_candidate(item, "vector")
+        assert cand["candidate_id"] == "vector:d1:0"
+        assert cand["source_type"] == "vector"
+        assert cand["confidence"] == "high"
+        assert "chunk_id" in cand
+        assert "metadata" in cand
+
+    def test_graph_candidate_includes_evidence(self):
+        """Decision: graph candidate includes graph_evidence in metadata."""
+        item = {
+            "chunk_id": None,
+            "doc_id": "d2",
+            "chunk_index": 1,
+            "doc_title": "Doc B",
+            "section_path": None,
+            "content": "",
+            "score": 0.55,
+            "graph_evidence": "Entity [Type] --REL--> Other",
+            "match_terms": ["term1", "term2"],
+        }
+        cand = _to_candidate(item, "graph")
+        assert cand["source_type"] == "graph"
+        assert cand["metadata"]["graph_evidence"] == "Entity [Type] --REL--> Other"
+        assert cand["metadata"]["match_terms"] == ["term1", "term2"]
+
+    def test_overall_confidence_high(self):
+        """Decision: top score >= 0.7 yields high confidence."""
+        cands = [
+            {"score": 0.85},
+            {"score": 0.6},
+        ]
+        assert _assess_overall_confidence(cands) == "high"
+
+    def test_overall_confidence_medium(self):
+        """Decision: top score >= 0.4 and < 0.7 yields medium confidence."""
+        cands = [
+            {"score": 0.55},
+            {"score": 0.3},
+        ]
+        assert _assess_overall_confidence(cands) == "medium"
+
+    def test_overall_confidence_low(self):
+        """Decision: top score < 0.4 yields low confidence."""
+        cands = [
+            {"score": 0.35},
+            {"score": 0.2},
+        ]
+        assert _assess_overall_confidence(cands) == "low"
+
+    def test_overall_confidence_empty(self):
+        """Decision: empty candidates yields low confidence."""
+        assert _assess_overall_confidence([]) == "low"
+
+    def test_confidence_threshold_boundary(self):
+        """Decision: boundary values handled correctly."""
+        assert _assess_single_confidence(0.7) == "high"
+        assert _assess_single_confidence(0.4) == "medium"
+        assert _assess_single_confidence(0.399) == "low"
+
+    def test_main_agent_routes_qa_to_subagent(self):
+        """E2E: MainAgent routes QA intent to qa_research subagent."""
+        mock_db = MagicMock()
+        agent = MainAgent(db=mock_db)
+
+        qa_cases = [
+            "什么是知识图谱",
+            "解释一下 RAG 流程",
+            "A 和 B 有什么区别",
+            "how does vector search work",
+            "what is the difference between X and Y",
+            "为什么模型会出错",
+        ]
+        for text in qa_cases:
+            intent = agent._simple_intent_detection(text)
+            assert intent == AgentType.QA, f"Should route to QA: {text}"
+
+    @pytest.mark.asyncio
+    async def test_main_agent_fallback_qa_routes_subagent(self, monkeypatch):
+        """E2E: MainAgent fallback routes QA to qa_research subagent."""
+        mock_db = MagicMock()
+        agent = MainAgent(db=mock_db)
+
+        state = {
+            "user_request": "什么是知识图谱",
+            "space_id": "space_1",
+            "tool_calls": [],
+            "subagent_calls": [],
+            "context": {"top_k": 5},
+        }
+
+        result = await agent._fallback_plan(state, MagicMock(), AgentType.QA)
+        assert result["decision_mode"] == "subagent"
+        assert result["active_subagent_call"]["name"] == "qa_research"
+        assert result.get("active_tool") is None
+
+    @pytest.mark.asyncio
+    async def test_main_agent_plan_qa_forces_subagent(self, monkeypatch):
+        """E2E: Even if LLM returns direct, QA intent forces subagent."""
+        mock_db = MagicMock()
+        mock_llm = AsyncMock()
+
+        mock_response = MagicMock()
+        mock_response.content = '{"decision": {"mode": "direct", "answer": "test"}}'
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        agent = MainAgent(db=mock_db, llm_client=mock_llm)
+
+        mock_user = MagicMock()
+        mock_user.id = 1
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_user
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        with patch.object(agent, "_get_tool_registry") as mock_tool_reg, \
+             patch.object(agent, "_get_skill_registry") as mock_skill_reg, \
+             patch.object(agent, "_get_agent_registry") as mock_agent_reg:
+
+            mock_tool_reg.return_value.get_tool_schemas.return_value = []
+            mock_skill_reg.return_value.get_skill_schemas.return_value = []
+            mock_agent_reg.return_value.get_agent_schemas.return_value = []
+
+            state = {
+                "user_request": "什么是知识图谱",
+                "session_id": "sess_1",
+                "user_id": 1,
+                "space_id": "space_1",
+                "context": {"top_k": 5},
+            }
+
+            result = await agent._plan_step(state)
+            assert result["decision_mode"] == "subagent"
+            assert result["active_subagent_call"]["name"] == "qa_research"

@@ -1,14 +1,10 @@
 """AgentRegistry - Agent 定义注册与执行。
 
-替换原有的 SubAgentRegistry，支持：
+支持：
 1. 从 .md 文件加载 Agent 定义（增强版 frontmatter）
 2. 基于 AgentDefinition 创建独立的 AgentSession
 3. Agent 执行（独立会话、sidechain 日志、熔断保护）
 4. 降级链（primary_agent 失败时尝试 fallback_agents）
-
-与旧版 SubAgentRegistry 的兼容性：
-- 保留 get_schemas() 接口用于 MainAgent prompt 注入
-- 保留 execute() 接口但内部改为 AgentSession 模式
 """
 
 from __future__ import annotations
@@ -120,9 +116,6 @@ class AgentRegistry:
         """获取 Agent schemas。"""
         return self.get_schemas(capability_type="agent", level=level)
 
-    # Backward compatibility alias
-    get_subagent_schemas = get_agent_schemas
-
     def get_skill_schemas(self, level: str = "l2") -> List[Dict[str, Any]]:
         """获取 Skill schemas。"""
         return self.get_schemas(capability_type="skill", level=level)
@@ -176,6 +169,7 @@ class AgentRegistry:
 
         # 检查熔断器
         breaker = self._get_circuit_breaker(agent_id)
+        session_coro = None
         try:
             # 创建独立 AgentSession
             session = AgentSession(
@@ -188,10 +182,13 @@ class AgentRegistry:
             )
 
             # 通过熔断器执行
-            result = await breaker.call(session.execute(request))
+            session_coro = session.execute(request)
+            result = await breaker.call(session_coro)
             return result
 
         except CircuitBreakerOpen:
+            if session_coro is not None:
+                session_coro.close()
             return AgentResult(
                 success=False,
                 summary=f"Agent '{agent_id}' 当前不可用（熔断器打开），请稍后重试。",
@@ -266,43 +263,3 @@ class AgentRegistry:
             correlation_id=request.correlation_id,
         )
 
-    # --------------------------------------------------------------------------
-    # 兼容旧接口
-    # --------------------------------------------------------------------------
-
-    async def execute(
-        self,
-        name: str,
-        arguments: Dict[str, Any],
-        user=None,
-        db=None,
-        llm_client=None,
-        session_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """兼容旧的 SubAgentRegistry.execute 接口。
-
-        内部转换为 AgentRequest / AgentResult 模式。
-        """
-        request = AgentRequest(
-            agent_id=name,
-            task_description=arguments.get("user_request", f"Execute {name}"),
-            arguments=arguments,
-            parent_session_id=session_id or arguments.get("session_id", ""),
-            user_id=getattr(user, "id", None) if user else arguments.get("user_id"),
-            space_id=arguments.get("space_public_id") or arguments.get("space_id"),
-        )
-
-        result = await self.execute_agent(request, db=db, llm_client=llm_client)
-
-        # 转换为旧格式
-        return {
-            "agent": name,
-            "success": result.success,
-            "result": {
-                "summary": result.summary,
-                "artifacts": result.artifacts,
-                "error": result.error,
-                "sidechain_id": result.sidechain_id,
-            },
-            "error": result.error,
-        }

@@ -29,6 +29,7 @@ from app.services.trade.data_rights_events import (
 from app.utils.snowflake import snowflake_id
 
 logger = logging.getLogger(__name__)
+LINEAGE_HASH_VERSION = "asset_lineage_pricing_v1"
 
 # ============================================================================
 # 常量与配置
@@ -149,37 +150,65 @@ class AssetLineagePricingService:
         relationship: str,
         source_type: Optional[DataLineageType] = None,
         source_id: Optional[str] = None,
-        user_id: Optional[int] = None,
+        user_id: int | None = None,
         space_id: Optional[str] = None,
         extra_metadata: Optional[Dict[str, Any]] = None,
         confidence_score: float = 1.0,
         transformation_logic: Optional[str] = None,
+        auto_commit: bool = False,
     ) -> DataLineage:
         """记录数据血缘关系（使用 DataLineage 现有字段名）。"""
+        if user_id is None:
+            raise ValueError("user_id is required when recording lineage")
+
         lineage_id = f"lin_{snowflake_id()}"
+        current_type = self._entity_type_value(current_entity_type)
+        source_type_value = self._entity_type_value(source_type) if source_type else "unknown"
+        source_id_value = source_id or ""
+        parent_hashes = await self._get_parent_hashes(source_type_value, source_id_value)
+        step_index = await self._get_next_step_index(current_type, current_entity_id)
+        lineage_hash = self._calculate_lineage_hash(
+            source_type=source_type_value,
+            source_id=source_id_value,
+            current_entity_type=current_type,
+            current_entity_id=current_entity_id,
+            relationship=relationship,
+            transformation_logic=transformation_logic,
+            parent_hashes=parent_hashes,
+            step_index=step_index,
+        )
+        metadata = dict(extra_metadata or {})
+        metadata["hash_version"] = LINEAGE_HASH_VERSION
+        metadata["parent_hashes"] = parent_hashes
 
         lineage = DataLineage(
             id=snowflake_id(),
             lineage_id=lineage_id,
-            current_entity_type=current_entity_type.value,
+            current_entity_type=current_type,
             current_entity_id=current_entity_id,
-            source_type=source_type.value if source_type else "unknown",
-            source_id=source_id or "",
-            source_metadata=extra_metadata or {},
+            source_type=source_type_value,
+            source_id=source_id_value,
+            source_metadata=metadata,
             relationship=relationship,
             transformation_logic=transformation_logic,
             confidence_score=confidence_score,
+            lineage_hash=lineage_hash,
+            parent_hash=parent_hashes[0] if parent_hashes else None,
+            step_index=step_index,
             space_id=space_id,
+            extra_metadata=metadata,
             created_by=user_id,
         )
 
         self.db.add(lineage)
-        await self.db.commit()
-        await self.db.refresh(lineage)
+        await self.db.flush()
+        if auto_commit:
+            await self.db.commit()
+            await self.db.refresh(lineage)
 
         logger.info(
-            f"Lineage recorded: {lineage_id} - {current_entity_type.value}:{current_entity_id} "
-            f"<- {source_type.value if source_type else 'null'}:{source_id}"
+            f"Lineage recorded: {lineage_id} - {current_type}:{current_entity_id} "
+            f"<- {source_type_value}:{source_id_value}"
         )
         return lineage
 
@@ -187,6 +216,8 @@ class AssetLineagePricingService:
         self,
         asset_id: str,
         processing_chain: List[Dict[str, Any]],
+        user_id: int | None = None,
+        auto_commit: bool = False,
     ) -> Optional[str]:
         """
         构建完整的数据血缘链。
@@ -198,6 +229,9 @@ class AssetLineagePricingService:
         Returns:
             lineage_root: 血缘根节点哈希
         """
+        if user_id is None:
+            raise ValueError("user_id is required when building lineage")
+
         previous_hash = "0"
         root_hash = None
 
@@ -206,33 +240,44 @@ class AssetLineagePricingService:
             logic = step.get("logic", "")
             logic_hash = hashlib.sha256(logic.encode()).hexdigest()[:32]
 
-            provenance_data = {
-                "node_id": node_id,
-                "relationship": step.get("step_type", "processed"),
-                "logic_hash": logic_hash,
-                "parent_hash": previous_hash,
-                "step_index": i,
-            }
-            provenance_hash = hashlib.sha256(
-                json.dumps(provenance_data, sort_keys=True).encode()
-            ).hexdigest()[:32]
+            parent_hashes = [] if previous_hash == "0" else [previous_hash]
+            relationship = step.get("step_type", "processed")
+            transformation_logic = logic[:200]
+            provenance_hash = self._calculate_lineage_hash(
+                source_type="unknown",
+                source_id="",
+                current_entity_type=DataLineageType.ASSET.value,
+                current_entity_id=asset_id,
+                relationship=relationship,
+                transformation_logic=transformation_logic,
+                parent_hashes=parent_hashes,
+                step_index=i,
+            )
 
             lineage_id = f"lin_{snowflake_id()}"
+            metadata = {
+                "node_id": node_id,
+                "logic_hash": logic_hash,
+                "hash_version": LINEAGE_HASH_VERSION,
+                "parent_hashes": parent_hashes,
+            }
             lineage = DataLineage(
                 id=snowflake_id(),
                 lineage_id=lineage_id,
                 current_entity_type=DataLineageType.ASSET.value,
                 current_entity_id=asset_id,
                 source_type="unknown",
-                source_id=previous_hash if previous_hash != "0" else "",
-                relationship=step.get("step_type", "processed"),
-                transformation_logic=logic[:200],
+                source_id="",
+                relationship=relationship,
+                transformation_logic=transformation_logic,
                 confidence_score=1.0,
                 lineage_hash=provenance_hash,
                 parent_hash=previous_hash if previous_hash != "0" else None,
                 step_index=i,
                 quality_metrics=step.get("quality_report", {}),
-                extra_metadata={"node_id": node_id, "logic_hash": logic_hash},
+                source_metadata=metadata,
+                extra_metadata=metadata,
+                created_by=user_id,
             )
             self.db.add(lineage)
 
@@ -240,7 +285,9 @@ class AssetLineagePricingService:
                 root_hash = provenance_hash
             previous_hash = provenance_hash
 
-        await self.db.commit()
+        await self.db.flush()
+        if auto_commit:
+            await self.db.commit()
         logger.info(f"Built lineage chain for {asset_id}: {len(processing_chain)} nodes")
         return root_hash
 
@@ -452,18 +499,25 @@ class AssetLineagePricingService:
         for i, record in enumerate(records):
             if not record.lineage_hash:
                 continue
+            metadata = record.extra_metadata if isinstance(record.extra_metadata, dict) else {}
+            if metadata.get("hash_version") != LINEAGE_HASH_VERSION:
+                continue
 
-            expected_data = {
-                "lineage_id": record.lineage_id,
-                "relationship": record.relationship or "",
-                "source_type": record.source_type,
-                "source_id": record.source_id,
-                "parent_hash": record.parent_hash or "0",
-                "step_index": i,
-            }
-            expected_hash = hashlib.sha256(
-                json.dumps(expected_data, sort_keys=True).encode()
-            ).hexdigest()[:32]
+            parent_hashes = metadata.get("parent_hashes")
+            if parent_hashes is None:
+                parent_hashes = [record.parent_hash] if record.parent_hash else []
+
+            record_step_index = record.step_index if isinstance(record.step_index, int) else i
+            expected_hash = self._calculate_lineage_hash(
+                source_type=record.source_type,
+                source_id=record.source_id,
+                current_entity_type=record.current_entity_type,
+                current_entity_id=record.current_entity_id,
+                relationship=record.relationship,
+                transformation_logic=record.transformation_logic,
+                parent_hashes=parent_hashes,
+                step_index=record_step_index,
+            )
 
             if record.lineage_hash != expected_hash:
                 logger.error(
@@ -652,6 +706,72 @@ class AssetLineagePricingService:
     # ========================================================================
     # 内部辅助方法
     # ========================================================================
+
+    def _entity_type_value(self, entity_type: DataLineageType | str) -> str:
+        if isinstance(entity_type, DataLineageType):
+            return entity_type.value
+        return str(entity_type)
+
+    def _calculate_lineage_hash(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        current_entity_type: str,
+        current_entity_id: str,
+        relationship: Optional[str],
+        transformation_logic: Optional[str],
+        parent_hashes: List[str],
+        step_index: int,
+    ) -> str:
+        normalized_parent_hashes = [
+            value for value in (parent_hashes or []) if isinstance(value, str) and value
+        ]
+        payload = {
+            "version": LINEAGE_HASH_VERSION,
+            "source_type": source_type if isinstance(source_type, str) and source_type else "unknown",
+            "source_id": source_id if isinstance(source_id, str) else "",
+            "current_entity_type": current_entity_type if isinstance(current_entity_type, str) else "",
+            "current_entity_id": current_entity_id if isinstance(current_entity_id, str) else "",
+            "relationship": relationship if isinstance(relationship, str) else "",
+            "transformation_logic": transformation_logic if isinstance(transformation_logic, str) else "",
+            "parent_hashes": sorted(normalized_parent_hashes),
+            "step_index": step_index,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    async def _get_parent_hashes(self, source_type: str, source_id: str) -> List[str]:
+        if not source_type or source_type == "unknown" or not source_id:
+            return []
+
+        result = await self.db.execute(
+            select(DataLineage.lineage_hash)
+            .where(
+                and_(
+                    DataLineage.current_entity_type == source_type,
+                    DataLineage.current_entity_id == source_id,
+                    DataLineage.lineage_hash.isnot(None),
+                )
+            )
+            .order_by(DataLineage.step_index.desc(), DataLineage.created_at.desc())
+            .limit(1)
+        )
+        lineage_hash = result.scalar_one_or_none()
+        return [lineage_hash] if isinstance(lineage_hash, str) and lineage_hash else []
+
+    async def _get_next_step_index(self, entity_type: str, entity_id: str) -> int:
+        result = await self.db.execute(
+            select(func.max(DataLineage.step_index)).where(
+                and_(
+                    DataLineage.current_entity_type == entity_type,
+                    DataLineage.current_entity_id == entity_id,
+                )
+            )
+        )
+        current_max = result.scalar_one_or_none()
+        return int(current_max) + 1 if isinstance(current_max, int) else 0
 
     async def _get_asset(self, asset_id: str) -> Optional[DataAssets]:
         result = await self.db.execute(

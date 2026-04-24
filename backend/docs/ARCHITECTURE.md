@@ -205,12 +205,12 @@ Phase 7 重构后，Skills 的定义从 Python 代码迁移到了 `agents/skills
 - YAML frontmatter（`skill_id`, `name`, `capability_type`, `executor`, `input_schema`）
 - Markdown 章节（`## 适用场景`, `## 工作流步骤`）
 
-`SkillMDParser` 负责读取解析，`SkillRegistry` 将 schema 注入 LLM prompt，执行时通过 `executor.py` 中的 `get_executor_method` 将 `executor` 路径（如 `app.services.skills.pricing_skill:PricingSkill.calculate_quick_price`）解析为实际可调用的 Python 方法。
+`SkillMDParser` 负责读取解析，`SkillRegistry` 将 schema 注入 LLM prompt，执行时通过 `executor.py` 中的 `get_executor_method` 将 `executor` 路径（如 `app.services.asset_lineage_pricing_service:AssetLineagePricingService.calculate_price`）解析为实际可调用的 Python 方法。
 
 现有 7 个 Skills：
-- `pricing_quick_quote` — 快速定价
-- `lineage_summary` — 血缘摘要
-- `lineage_impact` — 血缘影响分析
+- `get_asset_price` — 快速定价
+- `get_asset_lineage` — 血缘摘要
+- `verify_asset_lineage` — 血缘影响分析
 - `market_overview` — 市场概览
 - `market_trend` — 市场趋势
 - `privacy_protocol` — 隐私协议

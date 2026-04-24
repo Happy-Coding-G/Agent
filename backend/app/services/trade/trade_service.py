@@ -344,9 +344,9 @@ class TradeService:
                 await service.record_lineage(
                     source_type=DataLineageType.ASSET,
                     source_id=listing.asset_id or "",
-                    current_entity_type=DataLineageType.ASSET,
-                    current_entity_id=listing.asset_id or "",
-                    relationship="transformed",
+                    current_entity_type=DataLineageType.RIGHTS_TRANSACTION,
+                    current_entity_id=rights_tx.transaction_id,
+                    relationship="rights_assigned",
                     user_id=buyer.id,
                     space_id=listing.space_public_id or "",
                     extra_metadata={
@@ -507,9 +507,9 @@ class TradeService:
             await service.record_lineage(
                 source_type=DataLineageType.ASSET,
                 source_id=listing.asset_id or "",
-                current_entity_type=DataLineageType.ASSET,
-                current_entity_id=listing.asset_id or "",
-                relationship="transformed",
+                current_entity_type=DataLineageType.RIGHTS_TRANSACTION,
+                current_entity_id=rights_tx.transaction_id,
+                relationship="rights_assigned",
                 user_id=buyer.id,
                 space_id=listing.space_public_id or "",
                 extra_metadata={

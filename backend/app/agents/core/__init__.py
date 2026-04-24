@@ -1,10 +1,10 @@
 """
 Agent core package.
 
-Only the MainAgent-based routing and sub-agent dispatch path is kept here.
+Only the MainAgent-based routing and agent dispatch path is kept here.
 """
 
-from .main_agent import MainAgent, SubAgents
+from .main_agent import MainAgent
 from app.agents.agents import (
     AgentDefinition,
     AgentRequest,
@@ -34,7 +34,6 @@ from .prompts import (
 
 __all__ = [
     "MainAgent",
-    "SubAgents",
     "AgentType",
     "TaskStatus",
     "MainAgentState",

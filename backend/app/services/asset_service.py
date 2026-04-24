@@ -195,11 +195,13 @@ class AssetService(SpaceAwareService):
 
         service = AssetLineagePricingService(self.db)
 
+        lineage_records_created = 0
+
         for doc_id in source_document_ids:
             await service.record_lineage(
                 source_type=DataLineageType.FILE,
                 source_id=str(doc_id),
-                current_entity_type=DataLineageType.KNOWLEDGE,
+                current_entity_type=DataLineageType.ASSET,
                 current_entity_id=asset_id,
                 relationship="derived",
                 user_id=user.id,
@@ -211,6 +213,7 @@ class AssetService(SpaceAwareService):
                 },
                 transformation_logic="LLM-generated report from documents and knowledge graph",
             )
+            lineage_records_created += 1
 
         for src_asset_id in source_asset_ids or []:
             await service.record_lineage(
@@ -227,6 +230,10 @@ class AssetService(SpaceAwareService):
                 },
                 transformation_logic="Derived knowledge asset from source assets",
             )
+            lineage_records_created += 1
+
+        if lineage_records_created:
+            await self.db.commit()
 
         return self._db_asset_to_dict(db_asset)
 

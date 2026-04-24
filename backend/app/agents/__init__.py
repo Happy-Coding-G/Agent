@@ -5,12 +5,9 @@ Architecture (Agent != Skill != Tool):
 - AgentSession: Independent agent execution context (own LLM, tools, memory)
 - AgentRegistry: Agent definition discovery + execution dispatch
 - AgentToolRegistry: Atomic operation tools
-
-Legacy compatibility:
-- SubAgents class is retained but deprecated; use AgentRegistry instead
 """
 
-from app.agents.core import MainAgent, SubAgents
+from app.agents.core import MainAgent
 from app.agents.core import (
     AgentType,
     TaskStatus,
@@ -37,7 +34,6 @@ from app.agents.agents import (
 __all__ = [
     # Core
     "MainAgent",
-    "SubAgents",  # deprecated, kept for compatibility
     "AgentToolRegistry",
     # State types
     "MainAgentState",

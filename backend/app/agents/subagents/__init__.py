@@ -1,14 +1,12 @@
 """Sub-agent package.
 
-Note: Legacy LangGraph-based subagents have been migrated to .md-driven
-AgentSession (ReAct mode). All agent execution now goes through
-AgentRegistry → AgentSession.
+Agent definitions under this package are loaded from markdown documents
+and executed through AgentRegistry → AgentSession.
 """
 
 from importlib import import_module
 
 _EXPORTS = {
-    "SubAgentRegistry": ("app.agents.agents.registry", "AgentRegistry"),
     "AgentRegistry": ("app.agents.agents.registry", "AgentRegistry"),
 }
 

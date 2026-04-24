@@ -658,19 +658,10 @@
 | `resolution_notes` | `Text` | 解决备注 |
 | `detected_at` / `resolved_at` | `DateTime` | 检测/解决时间 |
 
-### 12.5 `data_lineage_nodes` — 数据血缘节点
+### 12.5 `data_lineage` — 统一数据血缘
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `id` | `Integer PK` | 自增主键 |
-| `node_id` | `String(64) UQ Index` | 节点标识 |
-| `asset_id` | `String(64) FK` | 关联资产 |
-| `node_type` | `String(50)` | 节点类型 |
-| `parent_nodes` | `JSONB` | 父节点列表 |
-| `processing_logic_hash` | `String(64)` | 处理逻辑哈希 |
-| `quality_metrics` | `JSONB` | 质量指标 |
-| `provenance_hash` | `String(64)` | 来源哈希 |
-| `created_at` | `DateTime` | 创建时间 |
+`data_lineage_nodes` 已迁移并删除。资产血缘、权益交易血缘和定价校验统一使用 `data_lineage`，
+由 `AssetLineagePricingService` 负责写入、查询和完整性校验。
 
 ---
 

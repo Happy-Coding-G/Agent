@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from app.services.asset_lineage_pricing_service import (
     AssetLineagePricingService,
     BASE_PRICE_BY_TYPE,
+    LINEAGE_HASH_VERSION,
 )
 from app.services.trade.data_rights_events import (
     DataSensitivityLevel,
@@ -19,7 +20,9 @@ from app.db.models import DataLineageType
 class TestLineage:
     @pytest.fixture
     def mock_db(self):
-        return AsyncMock()
+        db = AsyncMock()
+        db.add = MagicMock()
+        return db
 
     @pytest.fixture
     def service(self, mock_db):
@@ -42,12 +45,47 @@ class TestLineage:
             space_id="sp_1",
         )
         assert lineage.lineage_id.startswith("lin_")
+        mock_db.flush.assert_awaited()
+        mock_db.commit.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_verify_integrity_no_lineage_returns_true(self, service, mock_db):
         """无血缘时完整性校验返回 True（安全 fallback）。"""
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = []
+        mock_db.execute.return_value = mock_result
+
+        assert await service.verify_lineage_integrity("ast_1") is True
+
+    @pytest.mark.asyncio
+    async def test_verify_integrity_service_hash_returns_true(self, service, mock_db):
+        """统一服务写入格式的 hash 应可通过完整性校验。"""
+        mock_record = MagicMock()
+        mock_record.source_type = "file"
+        mock_record.source_id = "doc_1"
+        mock_record.current_entity_type = "asset"
+        mock_record.current_entity_id = "ast_1"
+        mock_record.relationship = "derived"
+        mock_record.transformation_logic = "normalize"
+        mock_record.parent_hash = None
+        mock_record.step_index = 0
+        mock_record.extra_metadata = {
+            "hash_version": LINEAGE_HASH_VERSION,
+            "parent_hashes": [],
+        }
+        mock_record.lineage_hash = service._calculate_lineage_hash(
+            source_type=mock_record.source_type,
+            source_id=mock_record.source_id,
+            current_entity_type=mock_record.current_entity_type,
+            current_entity_id=mock_record.current_entity_id,
+            relationship=mock_record.relationship,
+            transformation_logic=mock_record.transformation_logic,
+            parent_hashes=[],
+            step_index=mock_record.step_index,
+        )
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [mock_record]
         mock_db.execute.return_value = mock_result
 
         assert await service.verify_lineage_integrity("ast_1") is True
@@ -60,9 +98,14 @@ class TestLineage:
         mock_record.relationship = "derived"
         mock_record.source_type = "file"
         mock_record.source_id = "doc_1"
+        mock_record.current_entity_type = "asset"
+        mock_record.current_entity_id = "ast_1"
+        mock_record.transformation_logic = None
         mock_record.parent_hash = None
         mock_record.lineage_id = "lin_123"
         mock_record.confidence_score = 1.0
+        mock_record.step_index = 0
+        mock_record.extra_metadata = {"hash_version": LINEAGE_HASH_VERSION}
 
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = [mock_record]
@@ -74,7 +117,9 @@ class TestLineage:
 class TestPricing:
     @pytest.fixture
     def mock_db(self):
-        return AsyncMock()
+        db = AsyncMock()
+        db.add = MagicMock()
+        return db
 
     @pytest.fixture
     def service(self, mock_db):

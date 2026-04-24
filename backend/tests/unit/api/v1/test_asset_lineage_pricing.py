@@ -16,6 +16,14 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def disable_rate_limit(monkeypatch):
+    async def _allow(*args, **kwargs):
+        return True, {"limit": 1000, "remaining": 999, "reset_after": 60}
+
+    monkeypatch.setattr("app.core.rate_limit.TieredRateLimiter.is_allowed", _allow)
+
+
 @pytest.fixture
 def override_dependencies():
     mock_user = MagicMock()

@@ -41,7 +41,7 @@ memory:
 - 交易前了解市场活跃度
 
 ## 排除条件
-- 不要用于特定资产的分析（使用 pricing_quick_quote 或 market_trend）
+- 不要用于特定资产的分析（使用 get_asset_price 或 market_trend）
 - 不要用于竞争分析（使用 analyze_competition 接口）
 - 不要用于买方画像（使用 get_buyer_persona 接口）
 

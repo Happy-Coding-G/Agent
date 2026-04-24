@@ -32,6 +32,7 @@ from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 
 import redis.asyncio as redis
+from redis.exceptions import NoScriptError
 from fastapi import HTTPException, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -230,7 +231,7 @@ class TokenBucketRateLimiter(BaseRedisRateLimiter):
             result = await redis_conn.evalsha(
                 sha, 1, key, now, rate, capacity, cost
             )
-        except redis.NoScriptError:
+        except NoScriptError:
             # 脚本不存在，重新加载
             result = await redis_conn.eval(
                 self.TOKEN_BUCKET_SCRIPT, 1, key, now, rate, capacity, cost
@@ -333,7 +334,7 @@ class SlidingWindowRateLimiter(BaseRedisRateLimiter):
                 self.config.max_requests, request_id,
                 self.config.window_seconds
             )
-        except redis.NoScriptError:
+        except NoScriptError:
             result = await redis_conn.eval(
                 self.SLIDING_WINDOW_SCRIPT, 1, key, window_start, now,
                 self.config.max_requests, request_id,

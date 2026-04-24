@@ -345,7 +345,7 @@ SKILL.md 文件 (agents/skills/docs/*.md)
 MainAgent 选择 skill/subagent
     -> SkillRegistry.execute(skill_id, args)
     -> 查找 SkillMDDocument
-    -> 获取 executor 路径 (如 app.services.skills.pricing_skill:PricingSkill.calculate_quick_price)
+    -> 获取 executor 路径 (如 app.services.asset_lineage_pricing_service:AssetLineagePricingService.calculate_price)
     -> get_executor_method(executor_path, db)
         -> import_module -> instantiate class with db -> return bound method
     -> await method(**args)
@@ -377,7 +377,7 @@ MainAgent 选择 skill/subagent
 
 ```
 请求血缘摘要/影响分析
-    -> SkillRegistry.execute("lineage_summary" / "lineage_impact")
+    -> SkillRegistry.execute("get_asset_lineage" / "verify_asset_lineage")
     -> 查询 DataLineage 树
     -> 递归收集上游/下游节点
     -> 生成血缘报告

@@ -54,7 +54,7 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
         from app.core.errors import ServiceError
 
         try:
-            memory = UnifiedMemoryService(db)
+            memory = UnifiedMemoryService(db, user_id=user.id)
             episodic = EpisodicMemory(db)
             longterm = LongTermMemory(db)
 

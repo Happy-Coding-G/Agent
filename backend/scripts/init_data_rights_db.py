@@ -141,21 +141,6 @@ CREATE INDEX IF NOT EXISTS ix_violation_type ON policy_violations(violation_type
 CREATE INDEX IF NOT EXISTS ix_violation_severity ON policy_violations(severity);
 CREATE INDEX IF NOT EXISTS ix_violation_status ON policy_violations(manual_review_status);
 
--- Data Lineage Nodes Table
-CREATE TABLE IF NOT EXISTS data_lineage_nodes (
-    id BIGSERIAL PRIMARY KEY,
-    node_id VARCHAR(64) UNIQUE NOT NULL,
-    asset_id VARCHAR(64) NOT NULL REFERENCES data_assets(asset_id),
-    node_type VARCHAR(50) NOT NULL,
-    parent_nodes JSONB DEFAULT '[]',
-    processing_logic_hash VARCHAR(64) NOT NULL,
-    quality_metrics JSONB DEFAULT '{}',
-    provenance_hash VARCHAR(64) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS ix_lineage_asset ON data_lineage_nodes(asset_id);
-CREATE INDEX IF NOT EXISTS ix_lineage_type ON data_lineage_nodes(node_type);
 """
 
 CREATE_ENUMS_SQL = """
@@ -220,7 +205,6 @@ async def init_database():
                 "data_rights_transactions",
                 "data_access_audit_logs",
                 "policy_violations",
-                "data_lineage_nodes",
             ]
 
             for table in tables:

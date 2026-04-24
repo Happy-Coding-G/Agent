@@ -22,6 +22,12 @@ class SpaceRepository:
         res = await self.db.execute(stmt)
         return res.scalars().all()
 
+    async def get_by_public_id(self, space_public_id: str) -> Spaces | None:
+        res = await self.db.execute(
+            select(Spaces).where(Spaces.public_id == space_public_id)
+        )
+        return res.scalars().first()
+
     async def get_by_public_id_for_owner(self, space_public_id: str, owner_user_id: int) -> Spaces | None:
         res = await self.db.execute(
             select(Spaces).where(Spaces.public_id == space_public_id, Spaces.owner_user_id == owner_user_id)

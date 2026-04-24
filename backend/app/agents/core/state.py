@@ -54,17 +54,6 @@ class MainAgentState(TypedDict, total=False):
     final_answer: Optional[str]  # 最终自然语言回复
 
 
-class SubAgentInput(TypedDict, total=False):
-    """Standard input format for invoking subagents via invoke_subagent()."""
-
-    user_request: str  # The user's original request/query
-    space_id: Optional[str]  # Space public ID for permission filtering
-    user_id: Optional[int]  # Current user ID
-    top_k: int  # Number of results to retrieve (for QA)
-    # Generic extension field for SubAgent-specific params
-    extra: Optional[Dict[str, Any]]
-
-
 class ReviewState(TypedDict):
     doc_id: str
     review_type: str

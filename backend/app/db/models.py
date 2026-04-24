@@ -77,6 +77,8 @@ class DataLineageType(PyEnum):
     FILE = "file"
     ASSET = "asset"
     KNOWLEDGE = "knowledge"
+    ORDER = "order"
+    RIGHTS_TRANSACTION = "rights_transaction"
 
 
 identity_type_enum = Enum("password", "phone", "wechat", "github", name="identity_type")
@@ -510,11 +512,6 @@ class DocChunkEmbeddings(Base):
 agent_task_status_enum = Enum(
     "pending", "running", "completed", "failed", "cancelled", name="agent_task_status"
 )
-review_status_enum = Enum(
-    "pending", "approved", "rejected", "manual_review", name="review_status"
-)
-
-
 class AgentTasks(Base):
     """Tracks multi-agent task executions."""
 
@@ -588,144 +585,6 @@ class AgentTasks(Base):
     current_step: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
     )
-
-
-class AssetClusters(Base):
-    """Asset clustering results for organization."""
-
-    __tablename__ = "asset_clusters"
-    __table_args__ = (
-        Index("idx_asset_clusters_space", "space_id"),
-        Index("idx_asset_clusters_graph_id", "graph_cluster_id"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    public_id: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
-
-    space_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text)
-
-    # Cluster metadata
-    summary_report: Mapped[Optional[str]] = mapped_column(Text)  # Markdown report
-    graph_cluster_id: Mapped[Optional[str]] = mapped_column(
-        String(128)
-    )  # Neo4j cluster ID
-    cluster_method: Mapped[Optional[str]] = mapped_column(
-        String(32)
-    )  # community_detection, etc.
-
-    asset_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))
-
-    # Publication status
-    publication_ready: Mapped[bool] = mapped_column(
-        Boolean, server_default=text("false")
-    )
-
-    created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=text("now()")
-    )
-    updated_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=text("now()"),
-        onupdate=datetime.datetime.utcnow,
-    )
-
-
-class AssetClusterMembership(Base):
-    """Links assets to clusters for organization."""
-
-    __tablename__ = "asset_cluster_memberships"
-    __table_args__ = (
-        UniqueConstraint("cluster_id", "asset_id", name="uk_cluster_asset"),
-        Index("idx_cluster_membership_asset", "asset_id"),
-    )
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    cluster_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("asset_clusters.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    asset_id: Mapped[str] = mapped_column(String(32), nullable=False)
-
-    # Similarity/strength metrics
-    similarity_score: Mapped[Optional[float]] = mapped_column(Float)
-    cluster_role: Mapped[Optional[str]] = mapped_column(
-        String(32)
-    )  # core, peripheral, outlier
-
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=text("now()")
-    )
-
-    cluster: Mapped["AssetClusters"] = relationship(
-        "AssetClusters", back_populates="memberships"
-    )
-
-
-# Add back-populates to AssetClusters
-AssetClusters.memberships: Mapped[List["AssetClusterMembership"]] = relationship(
-    "AssetClusterMembership", back_populates="cluster"
-)
-
-
-class ReviewLogs(Base):
-    """Document review audit trail."""
-
-    __tablename__ = "review_logs"
-    __table_args__ = (
-        Index("idx_review_logs_doc", "doc_id"),
-        Index("idx_review_logs_status", "final_status"),
-    )
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    public_id: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
-
-    doc_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("documents.doc_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-
-    review_type: Mapped[str] = mapped_column(
-        String(32), nullable=False
-    )  # quality, compliance, completeness
-    score: Mapped[float] = mapped_column(Float, nullable=False)
-    passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
-
-    # Detailed issues found
-    issues: Mapped[Optional[dict]] = mapped_column(JSONB)  # List of issue objects
-    recommendations: Mapped[Optional[dict]] = mapped_column(JSONB)
-
-    # Rework tracking
-    rework_needed: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
-    rework_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))
-    max_rework: Mapped[int] = mapped_column(Integer, server_default=text("3"))
-
-    # Final status
-    final_status: Mapped[str] = mapped_column(
-        review_status_enum, server_default=text("'pending'")
-    )
-    reviewer_notes: Mapped[Optional[str]] = mapped_column(Text)
-
-    created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=text("now()")
-    )
-
-    document: Mapped["Documents"] = relationship(
-        "Documents", back_populates="review_logs"
-    )
-
-
-# Add back-populates to Documents
-Documents.review_logs: Mapped[List["ReviewLogs"]] = relationship(
-    "ReviewLogs", back_populates="document", order_by="ReviewLogs.created_at.desc()"
-)
 
 
 # ============================================================================
@@ -1566,49 +1425,6 @@ class AuditLogs(Base):
     )
 
 
-class AssetProvenance(Base):
-    """
-    资产来源记录
-
-    记录资产的来源和出处信息。
-    """
-
-    __tablename__ = "asset_provenance"
-    __table_args__ = (
-        Index("idx_prov_asset", "asset_id"),
-        Index("idx_prov_source", "source_type", "source_id"),
-    )
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    provenance_id: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
-
-    # 资产信息
-    asset_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    asset_type: Mapped[str] = mapped_column(String(32), nullable=False)  # file/document/knowledge
-
-    # 来源信息
-    source_type: Mapped[str] = mapped_column(String(32), nullable=False)  # upload/import/generation
-    source_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    source_url: Mapped[Optional[str]] = mapped_column(Text)
-    source_description: Mapped[Optional[str]] = mapped_column(Text)
-
-    # 来源详情
-    origin_date: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True))
-    creator_name: Mapped[Optional[str]] = mapped_column(String(255))
-    license_type: Mapped[Optional[str]] = mapped_column(String(64))
-
-    # 验证信息
-    verification_hash: Mapped[Optional[str]] = mapped_column(String(64))
-    verification_method: Mapped[Optional[str]] = mapped_column(String(32))
-
-    # 记录元数据
-    record_metadata: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'"))
-
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=text("now()")
-    )
-
-
 class DataLineage(Base):
     """
     数据血缘追踪
@@ -1933,58 +1749,6 @@ class AgentRateLimit(Base):
     )
 
 
-class OutboxEvents(Base):
-    """
-    Outbox 事件表 - 保证事务一致性
-
-    设计原则：
-    1. 业务操作和事件写入在同一个事务中完成
-    2. 后台 worker 定期读取未处理事件并执行
-    3. 处理成功后标记为已处理
-    4. 支持幂等和重试
-    """
-
-    __tablename__ = "outbox_events"
-
-    event_id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    event_type: Mapped[str] = mapped_column(String(50), nullable=False)  # 事件类型
-    aggregate_type: Mapped[str] = mapped_column(
-        String(50), nullable=False
-    )  # 聚合根类型
-    aggregate_id: Mapped[str] = mapped_column(String(32), nullable=False)  # 聚合根ID
-
-    # 事件载荷
-    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
-
-    # 处理状态
-    status: Mapped[str] = mapped_column(
-        String(20), default="pending"
-    )  # pending, processing, completed, failed
-
-    # 重试机制
-    retry_count: Mapped[int] = mapped_column(Integer, default=0)
-    max_retries: Mapped[int] = mapped_column(Integer, default=3)
-
-    # 时间戳
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=text("now()")
-    )
-    processed_at: Mapped[Optional[datetime.datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    # 处理信息
-    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    processor_id: Mapped[Optional[str]] = mapped_column(
-        String(64), nullable=True
-    )  # 处理者ID
-
-    __table_args__ = (
-        Index("idx_outbox_status_created", "status", "created_at"),
-        Index("idx_outbox_aggregate", "aggregate_type", "aggregate_id"),
-    )
-
-
 # =============================================================================
 # Data Rights Models (Phase 1)
 # =============================================================================
@@ -2014,21 +1778,6 @@ class DataRightsStatus(str, PyEnum):
     EXPIRED = "expired"
     REVOKED = "revoked"
     VIOLATED = "violated"
-
-
-class AssetOrigin(str, PyEnum):
-    """数字资产来源"""
-    SPACE_GENERATED = "space_generated"
-    CHAT_GENERATED = "chat_generated"
-    ASSET_DERIVED = "asset_derived"
-
-
-class AssetStatus(str, PyEnum):
-    """数字资产状态"""
-    DRAFT = "draft"
-    AWAITING_LISTING_CONFIRMATION = "awaiting_listing_confirmation"
-    LISTED = "listed"
-    ARCHIVED = "archived"
 
 
 class DataAssets(Base):
