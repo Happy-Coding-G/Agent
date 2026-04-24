@@ -90,18 +90,6 @@ class TestAgentRegistry:
         assert "all_agents_failed" in result.error
 
     @pytest.mark.asyncio
-    async def test_legacy_execute_interface(self, registry):
-        """Test backward-compatible execute() interface."""
-        result = await registry.execute(
-            name="nonexistent",
-            arguments={"user_request": "test request"},
-            session_id="sess_1",
-        )
-        assert result["agent"] == "nonexistent"
-        assert not result["success"]
-        assert result["error"] == "agent_not_found: nonexistent"
-
-    @pytest.mark.asyncio
     async def test_circuit_breaker_open(self, registry):
         """Test that open circuit breaker returns failure."""
         from app.agents.agents.circuit_breaker import CircuitBreakerOpen
@@ -163,7 +151,9 @@ class TestAgentRegistryIntegration:
             assert definition.temperature == 0.2
             assert definition.permission_mode == "auto"
             assert definition.memory.namespace == "qa"
-            assert "qa_hybrid_search" in definition.tools
+            assert "vector_search" in definition.tools
+            assert "graph_search" in definition.tools
+            assert "rerank" in definition.tools
             assert "qa_generate_answer" in definition.tools
 
     def test_review_and_asset_workflow_do_not_reference_wrapper_tools(self):
@@ -179,18 +169,6 @@ class TestAgentRegistryIntegration:
         asset_definition = registry.get_definition("asset_organize_workflow")
         if asset_definition:
             assert "organize_assets" in asset_definition.tools
-
-    def test_schema_backward_compatibility(self):
-        """Test that get_subagent_schemas works as alias."""
-        from app.agents.skills.parser import SkillMDParser
-
-        parser = SkillMDParser()
-        registry = AgentRegistry(parser)
-
-        # get_subagent_schemas should be an alias for get_agent_schemas
-        agent_schemas = registry.get_agent_schemas()
-        subagent_schemas = registry.get_subagent_schemas()
-        assert agent_schemas == subagent_schemas
 
     def test_get_schemas_l1(self):
         """Test that get_schemas(level='l1') returns lightweight schemas."""

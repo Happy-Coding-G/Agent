@@ -34,28 +34,6 @@ async def _get_user(db: AsyncSession, user_id: Optional[int]) -> Optional["Users
     return result.scalar_one_or_none()
 
 
-class SubAgents:
-    # 兼容占位类：旧版子智能体封装已下线，保留最小接口避免迁移期间直接失效。
-    def __init__(
-        self, db: AsyncSession, llm_client=None, space_path: Optional[str] = None
-    ):
-        self._db = db
-        self._llm_client = llm_client
-        self._space_path = space_path
-
-    async def invoke_subagent(
-        self, agent_type: AgentType, input_state: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        return {
-            "subagent": agent_type.value,
-            "error": "SubAgents compatibility shim is deprecated. Use AgentRegistry or Tool Registry.",
-            "success": False,
-        }
-
-    def get_registered_agents(self) -> list[str]:
-        return []
-
-
 # =============================================================================
 # 主控智能体：具备工具感知能力的推理-行动执行器
 # =============================================================================
@@ -71,21 +49,8 @@ class MainAgent:
         self._llm_client = llm_client
         self._space_path = space_path
         self._memory = memory_service
-        self._subagents: Optional[SubAgents] = None
         self._tool_registry = None
         self.graph = self._build_graph()
-
-    @property
-    def subagents(self) -> SubAgents:
-        if self._subagents is None:
-            self._subagents = SubAgents(
-                db=self._db, llm_client=self._llm_client, space_path=self._space_path
-            )
-        return self._subagents
-
-    @subagents.setter
-    def subagents(self, value):
-        self._subagents = value
 
     def _get_tool_registry(
         self, user, space_id: Optional[str] = None
@@ -330,9 +295,41 @@ class MainAgent:
                     subagent_calls.append(subagent_call)
                     state["subagent_calls"] = subagent_calls
                 else:
-                    state["final_answer"] = decision.get("answer") or content.strip()
+                    # QA 意图路由到 qa_research subagent，由子 Agent 自主决策三层检索
+                    if intent == AgentType.QA:
+                        subagent_call = {
+                            "name": "qa_research",
+                            "arguments": {
+                                "query": user_request,
+                                "space_id": space_id or "",
+                                "top_k": state.get("context", {}).get("top_k", 5),
+                            },
+                        }
+                        state["active_subagent_call"] = subagent_call
+                        sac = state.get("subagent_calls", [])
+                        sac.append(subagent_call)
+                        state["subagent_calls"] = sac
+                        state["decision_mode"] = "subagent"
+                    else:
+                        state["final_answer"] = decision.get("answer") or content.strip()
             else:
-                state["final_answer"] = content.strip()
+                # 未解析出 decision，且为 QA 意图时路由到 qa_research subagent
+                if intent == AgentType.QA:
+                    subagent_call = {
+                        "name": "qa_research",
+                        "arguments": {
+                            "query": user_request,
+                            "space_id": space_id or "",
+                            "top_k": state.get("context", {}).get("top_k", 5),
+                        },
+                    }
+                    state["active_subagent_call"] = subagent_call
+                    sac = state.get("subagent_calls", [])
+                    sac.append(subagent_call)
+                    state["subagent_calls"] = sac
+                    state["decision_mode"] = "subagent"
+                else:
+                    state["final_answer"] = content.strip()
         except Exception as e:
             logger.warning(f"LLM plan failed, using fallback: {e}")
             state = await self._fallback_plan(state, registry, intent)
@@ -346,7 +343,24 @@ class MainAgent:
         user_request = state.get("user_request", "")
         space_id = state.get("space_id")
 
-        if intent in (AgentType.QA, AgentType.CHAT):
+        if intent == AgentType.QA:
+            # QA 意图降级路由到 qa_research subagent
+            subagent_call = {
+                "name": "qa_research",
+                "arguments": {
+                    "query": user_request,
+                    "space_id": space_id or "",
+                    "top_k": state.get("context", {}).get("top_k", 5),
+                },
+            }
+            state["active_subagent_call"] = subagent_call
+            sac = state.get("subagent_calls", [])
+            sac.append(subagent_call)
+            state["subagent_calls"] = sac
+            state["decision_mode"] = "subagent"
+            return state
+
+        if intent == AgentType.CHAT:
             state["active_tool"] = None
             state["final_answer"] = None
             return state

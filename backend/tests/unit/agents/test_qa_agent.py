@@ -15,6 +15,9 @@ from app.agents.tools.qa_tools import (
     _normalize_score,
     _build_context_text,
     _build_qa_prompt,
+    _assess_single_confidence,
+    _assess_overall_confidence,
+    _to_candidate,
 )
 from app.agents.core.main_agent import MainAgent, AgentType
 
@@ -53,6 +56,55 @@ class TestQAHelperFunctions:
         prompt = _build_qa_prompt("Q2?", "Ctx", history)
         assert "Q1" in prompt
         assert "A1" in prompt
+
+    def test_assess_single_confidence(self):
+        assert _assess_single_confidence(0.85) == "high"
+        assert _assess_single_confidence(0.7) == "high"
+        assert _assess_single_confidence(0.5) == "medium"
+        assert _assess_single_confidence(0.4) == "medium"
+        assert _assess_single_confidence(0.39) == "low"
+        assert _assess_single_confidence(0.0) == "low"
+        assert _assess_single_confidence(float("nan")) == "low"
+
+    def test_assess_overall_confidence(self):
+        assert _assess_overall_confidence([]) == "low"
+        assert _assess_overall_confidence([{"score": 0.8}]) == "high"
+        assert _assess_overall_confidence([{"score": 0.5}, {"score": 0.3}]) == "medium"
+        assert _assess_overall_confidence([{"score": 0.2}]) == "low"
+
+    def test_to_candidate_vector(self):
+        item = {
+            "chunk_id": "c1",
+            "doc_id": "d1",
+            "chunk_index": 0,
+            "doc_title": "Doc A",
+            "section_path": "S1",
+            "content": "hello",
+            "score": 0.82,
+        }
+        cand = _to_candidate(item, "vector")
+        assert cand["candidate_id"] == "vector:d1:0"
+        assert cand["source_type"] == "vector"
+        assert cand["confidence"] == "high"
+        assert cand["metadata"] == {}
+
+    def test_to_candidate_graph(self):
+        item = {
+            "chunk_id": None,
+            "doc_id": "d1",
+            "chunk_index": 1,
+            "doc_title": "Doc B",
+            "section_path": None,
+            "content": "",
+            "score": 0.55,
+            "graph_evidence": "E1 --R--> E2",
+            "match_terms": ["t1"],
+        }
+        cand = _to_candidate(item, "graph")
+        assert cand["source_type"] == "graph"
+        assert cand["confidence"] == "medium"
+        assert cand["metadata"]["graph_evidence"] == "E1 --R--> E2"
+        assert cand["metadata"]["match_terms"] == ["t1"]
 
 
 class TestHybridMerge:

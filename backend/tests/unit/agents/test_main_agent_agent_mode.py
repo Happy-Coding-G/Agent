@@ -47,6 +47,65 @@ class TestMainAgentAgentExecution:
         assert "Simple query" in summary
 
     @pytest.mark.asyncio
+    async def test_plan_step_qa_intent_routes_to_subagent(self, main_agent):
+        """QA intent must route to qa_research subagent, not tool."""
+        state = {
+            "user_request": "什么是知识图谱",
+            "space_id": "space_1",
+            "user_id": 1,
+            "session_id": "sess_1",
+            "context": {"top_k": 5},
+        }
+
+        mock_user = MagicMock()
+        mock_user.id = 1
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_user
+        main_agent._db.execute = AsyncMock(return_value=mock_result)
+
+        # Mock LLM to return direct (simulating LLM choosing direct for QA)
+        mock_response = MagicMock()
+        mock_response.content = '{"decision": {"mode": "direct", "answer": "test"}}'
+        main_agent._llm_client.ainvoke = AsyncMock(return_value=mock_response)
+
+        mock_tool_registry = MagicMock()
+        mock_tool_registry.get_tool_schemas.return_value = []
+
+        mock_skill_registry = MagicMock()
+        mock_skill_registry.get_skill_schemas.return_value = []
+
+        mock_agent_registry = MagicMock()
+        mock_agent_registry.get_agent_schemas.return_value = []
+
+        with patch.object(main_agent, "_get_tool_registry", return_value=mock_tool_registry):
+            with patch.object(main_agent, "_get_skill_registry", return_value=mock_skill_registry):
+                with patch.object(main_agent, "_get_agent_registry", return_value=mock_agent_registry):
+                    result = await main_agent._plan_step(state)
+
+        # QA intent should force subagent route despite LLM saying direct
+        assert result["decision_mode"] == "subagent"
+        assert result["active_subagent_call"]["name"] == "qa_research"
+        assert result["active_subagent_call"]["arguments"]["query"] == "什么是知识图谱"
+
+    @pytest.mark.asyncio
+    async def test_fallback_plan_qa_routes_to_subagent(self, main_agent):
+        """Fallback plan for QA must route to qa_research subagent."""
+        state = {
+            "user_request": "解释 RAG 流程",
+            "space_id": "space_1",
+            "tool_calls": [],
+            "subagent_calls": [],
+            "context": {"top_k": 5},
+        }
+
+        result = await main_agent._fallback_plan(state, MagicMock(), AgentType.QA)
+
+        assert result["decision_mode"] == "subagent"
+        assert result["active_subagent_call"]["name"] == "qa_research"
+        assert result["active_subagent_call"]["arguments"]["space_id"] == "space_1"
+        assert result.get("active_tool") is None
+
+    @pytest.mark.asyncio
     async def test_execute_subagent_not_found(self, main_agent):
         state: MainAgentState = {
             "active_subagent_call": {"name": "nonexistent", "arguments": {}},
@@ -360,7 +419,7 @@ class TestMainAgentRespondStep:
             "tool_results": [{"tool": "search", "result": {"hits": 2}}],
             "skill_results": [
                 {
-                    "skill": "pricing_quick_quote",
+                    "skill": "get_asset_price",
                     "result": {"price": 128, "currency": "CNY"},
                 }
             ],
@@ -372,6 +431,6 @@ class TestMainAgentRespondStep:
         prompt = main_agent._llm_client.ainvoke.call_args[0][0]
         assert "search" in prompt
         assert "hits" in prompt
-        assert "pricing_quick_quote" in prompt
+        assert "get_asset_price" in prompt
         assert "price" in prompt
         assert result["task_result"]["answer"] == "已经完成检索和分析。"

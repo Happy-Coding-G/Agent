@@ -27,6 +27,10 @@ class FileSearchInput(BaseModel):
     query: str = Field(description="自然语言查询，如'查找所有markdown文件'")
 
 
+class FileReadInput(BaseModel):
+    file_paths: List[str] = Field(description="要读取的文件路径列表（相对空间根目录）")
+
+
 class FileManageInput(BaseModel):
     action: str = Field(description="操作类型: list_tree, create_folder, rename_folder")
     space_id: str = Field(description="空间public_id")
@@ -99,7 +103,7 @@ async def _parse_query(query: str) -> tuple[str, str]:
     return _fallback_parse(query)
 
 
-def _search_files(space_path: Path, interpreted_path: str, pattern: str) -> list[dict[str, Any]]:
+def _search_files_fn(space_path: Path, interpreted_path: str, pattern: str) -> list[dict[str, Any]]:
     """Search for files matching the pattern within the validated path."""
     full_path = space_path / interpreted_path
     results: list[dict[str, Any]] = []
@@ -131,54 +135,8 @@ def _search_files(space_path: Path, interpreted_path: str, pattern: str) -> list
     ]
 
 
-def _read_files(space_path: Path, file_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Read content of matched files (max 10)."""
-    for file_result in file_results[:10]:
-        try:
-            file_path = space_path / file_result["path"]
-
-            if not _is_safe_path(str(space_path), str(file_result["path"])):
-                file_result["content"] = "[Security: Path validation failed]"
-                continue
-
-            suffix = file_path.suffix.lower()
-            if suffix == ".md":
-                file_result["content"] = file_path.read_text(encoding="utf-8", errors="ignore")
-            elif suffix == ".txt":
-                file_result["content"] = file_path.read_text(encoding="utf-8", errors="ignore")
-            elif suffix == ".json":
-                file_result["content"] = json.dumps(
-                    json.loads(file_path.read_text(encoding="utf-8", errors="ignore")),
-                    ensure_ascii=False, indent=2,
-                )
-            elif suffix in (".yaml", ".yml"):
-                import yaml
-                file_result["content"] = yaml.dump(
-                    yaml.safe_load(file_path.read_text(encoding="utf-8", errors="ignore")),
-                    allow_unicode=True,
-                )
-            else:
-                content = file_path.read_bytes()
-                file_result["content"] = (
-                    content[:1000].decode("utf-8", errors="ignore") + "..."
-                    if len(content) > 1000
-                    else content.decode("utf-8", errors="ignore")
-                )
-
-            content = file_result.get("content", "")
-            file_result["content_preview"] = (
-                content[:500] + "..." if len(content) > 500 else content
-            )
-
-        except Exception as e:
-            logger.warning(f"Failed to read {file_result.get('path')}: {e}")
-            file_result["content"] = f"[Error reading file: {e}]"
-
-    return file_results
-
-
-def _format_results(file_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Format the final results for display."""
+def _format_search_results(file_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Format search results (metadata only, no content)."""
     formatted = []
     for idx, result in enumerate(file_results, 1):
         formatted.append({
@@ -187,14 +145,76 @@ def _format_results(file_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "path": result.get("path", ""),
             "size": result.get("size", 0),
             "modified": result.get("modified", 0),
-            "preview": result.get("content_preview", ""),
-            "has_content": "content" in result and not result["content"].startswith("["),
         })
     return formatted
 
 
-async def _query_files(query: str, space_path: str) -> dict[str, Any]:
-    """本地文件查询 Skill。"""
+def _read_file_contents(space_path: Path, file_paths: list[str]) -> list[dict[str, Any]]:
+    """Read content of specified files (max 20)."""
+    results: list[dict[str, Any]] = []
+    for file_path_str in file_paths[:20]:
+        try:
+            if not _is_safe_path(str(space_path), file_path_str):
+                results.append({
+                    "path": file_path_str,
+                    "content": "[Security: Path validation failed]",
+                    "error": "Path traversal detected",
+                })
+                continue
+
+            file_path = space_path / file_path_str
+            if not file_path.exists():
+                results.append({
+                    "path": file_path_str,
+                    "content": "",
+                    "error": "File not found",
+                })
+                continue
+
+            suffix = file_path.suffix.lower()
+            if suffix == ".md":
+                content = file_path.read_text(encoding="utf-8", errors="ignore")
+            elif suffix == ".txt":
+                content = file_path.read_text(encoding="utf-8", errors="ignore")
+            elif suffix == ".json":
+                content = json.dumps(
+                    json.loads(file_path.read_text(encoding="utf-8", errors="ignore")),
+                    ensure_ascii=False, indent=2,
+                )
+            elif suffix in (".yaml", ".yml"):
+                import yaml
+                content = yaml.dump(
+                    yaml.safe_load(file_path.read_text(encoding="utf-8", errors="ignore")),
+                    allow_unicode=True,
+                )
+            else:
+                raw = file_path.read_bytes()
+                content = (
+                    raw[:2000].decode("utf-8", errors="ignore") + "..."
+                    if len(raw) > 2000
+                    else raw.decode("utf-8", errors="ignore")
+                )
+
+            preview = content[:500] + "..." if len(content) > 500 else content
+            results.append({
+                "path": file_path_str,
+                "name": file_path.name,
+                "content": content,
+                "preview": preview,
+                "size": file_path.stat().st_size,
+            })
+        except Exception as e:
+            logger.warning(f"Failed to read {file_path_str}: {e}")
+            results.append({
+                "path": file_path_str,
+                "content": f"[Error reading file: {e}]",
+                "error": str(e),
+            })
+    return results
+
+
+async def _search_files(query: str, space_path: str) -> dict[str, Any]:
+    """Search files by query, return metadata only."""
     if not query or not query.strip():
         return {"success": False, "query": query, "files": [], "error": "Empty query"}
 
@@ -220,9 +240,8 @@ async def _query_files(query: str, space_path: str) -> dict[str, Any]:
                 "files": [], "error": f"Path does not exist: {interpreted_path}",
             }
 
-        file_results = _search_files(resolved_space, interpreted_path, interpreted_pattern)
-        file_results = _read_files(resolved_space, file_results)
-        formatted = _format_results(file_results)
+        file_results = _search_files_fn(resolved_space, interpreted_path, interpreted_pattern)
+        formatted = _format_search_results(file_results)
 
         return {
             "success": True, "query": query,
@@ -230,7 +249,7 @@ async def _query_files(query: str, space_path: str) -> dict[str, Any]:
             "files": formatted, "error": None,
         }
     except Exception as e:
-        logger.exception(f"File query failed: {e}")
+        logger.exception(f"File search failed: {e}")
         return {"success": False, "query": query, "files": [], "error": str(e)}
 
 
@@ -240,7 +259,21 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
     space_path = registry.space_path
 
     async def file_search(query: str) -> Dict[str, Any]:
-        return await _query_files(query=query, space_path=space_path or "/tmp/uploads")
+        """Search for files matching the natural language query. Returns file metadata only (no content)."""
+        return await _search_files(query=query, space_path=space_path or "/tmp/uploads")
+
+    async def file_read(file_paths: List[str]) -> Dict[str, Any]:
+        """Read contents of specified file paths."""
+        resolved_space = Path(space_path or "/tmp/uploads").resolve()
+        if not resolved_space:
+            return {"success": False, "files": [], "error": "Space path not configured"}
+
+        try:
+            results = _read_file_contents(resolved_space, file_paths)
+            return {"success": True, "files": results, "error": None}
+        except Exception as e:
+            logger.exception(f"File read failed: {e}")
+            return {"success": False, "files": [], "error": str(e)}
 
     async def file_manage(
         action: str,
@@ -276,9 +309,16 @@ def build_tools(registry: "AgentToolRegistry") -> List[StructuredTool]:
         StructuredTool.from_function(
             name="file_search",
             func=file_search,
-            description="根据自然语言查询搜索空间内的文件内容",
+            description="根据自然语言查询搜索空间内的文件，返回文件元数据列表（不含内容）。如需读取内容，请调用 file_read。",
             args_schema=FileSearchInput,
             coroutine=file_search,
+        ),
+        StructuredTool.from_function(
+            name="file_read",
+            func=file_read,
+            description="读取指定文件路径列表的内容，支持 .md/.txt/.json/.yaml/.yml 等格式。",
+            args_schema=FileReadInput,
+            coroutine=file_read,
         ),
         StructuredTool.from_function(
             name="file_manage",
