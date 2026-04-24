@@ -378,6 +378,10 @@ class MainAgent:
                 "trade_workflow",
                 {"action": "purchase", "space_id": space_id or "", "payload": {}},
             ),
+            AgentType.FILE_QUERY: (
+                "file_query",
+                {"query": user_request, "space_path": ""},
+            ),
         }
 
         if intent in subagent_map:

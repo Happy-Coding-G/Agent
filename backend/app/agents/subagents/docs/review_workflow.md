@@ -67,18 +67,22 @@ examples:
 ## 执行流程
 
 ```text
+file_search / file_read（可选）
+  ├─ 若 doc_id 为文件路径或需参考关联文档，先读取内容
+  └─ 否则直接以 doc_id 传入检查工具
+  ↓
 check_document_quality(doc_id)
   ├─ 返回 quality_score / issues
   └─ 若 quality_score < 0.5，可标记为需 rework
-
+  ↓
 check_document_compliance(doc_id)
   ├─ 返回 passed / issues（敏感信息检测）
   └─ 若未通过，可标记为需 rework
-
+  ↓
 check_document_completeness(doc_id)
   ├─ 返回 passed / issues（标题、结构）
   └─ 返回补充建议
-
+  ↓
 judge_review(doc_id, quality_score, compliance_passed, completeness_passed, review_type)
   └─ 返回 final_status / overall_passed / message
 ```

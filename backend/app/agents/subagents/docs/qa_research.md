@@ -18,10 +18,10 @@ tools:
   - qa_generate_answer
   - file_search
   - file_read
+  - get_asset_price
   - memory_manage
 
-skills:
-  - get_asset_price
+skills: []
 
 memory:
   namespace: qa

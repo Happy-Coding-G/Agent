@@ -65,7 +65,12 @@ CAPABILITY_ROUTING_SYSTEM_PROMPT = """你是 Agent 数据空间平台的主控 A
 
 路由优先级：
 1. 当用户意图是问答（QA）且当前空间存在文档时，**必须**调用 qa_research 子 Agent，由其自主执行三层检索策略并生成回答，不要直接回答
-2. 只有纯闲聊、问候、或者空间内没有任何文档时，才使用 direct 模式
+2. 当用户意图是文件查询（FILE_QUERY）时，**必须**调用 file_search 工具或 file_query 子 Agent，不要直接回答
+3. 只有纯闲聊、问候、或者空间内没有任何文档时，才使用 direct 模式
+
+skill 模式限制：
+- skill mode 仅用于直接调用已注册的独立分析能力（如 market_overview、audit_report）
+- 不适合需要多轮决策、多工具组合的复杂任务，此类任务应使用 subagent 模式
 
 重要边界：
 - SubAgent 是独立会话，你只传递上下文摘要，不控制其内部执行步骤
