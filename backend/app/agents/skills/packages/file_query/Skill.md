@@ -1,7 +1,7 @@
 ---
 skill_id: file_query
 name: file_query
-capability_type: skill
+capability_type: agent
 description: 本地文件系统查询 Agent，支持自然语言解析为 glob 模式，具备路径遍历防护与扩展名白名单。
 model: deepseek-chat
 temperature: 0.2
